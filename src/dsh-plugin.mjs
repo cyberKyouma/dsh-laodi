@@ -1,0 +1,489 @@
+/**
+ * Cordis 宿主入口：主循环 + 设置页 HTTP API。
+ *
+ * 路由前缀 /dsh-laodi-9101：
+ *   GET  /config      当前设置 + DSH 状态（dsh / dshProviders / dshModels）
+ *   POST /config      保存设置；body.dshProviderEdit 可新增/编辑 DSH provider
+ *   POST /once        立刻跑一轮
+ *   GET  /probe       只探一屏
+ *   POST /vision/test 测一下视觉
+ */
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+
+import { loadConfig } from './config.mjs';
+import { createVisionClient } from './vision/client.mjs';
+import { resolveVisionTarget } from './vision/magpie.mjs';
+import { createHost } from './index.mjs';
+import {
+  normalizeProviderSpec,
+  providerKeyStatus,
+  readDshState,
+  upsertDshProvider,
+} from './host/dsh-settings.mjs';
+import {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  publicSettings,
+  readUserSettings,
+  writeUserSettings,
+} from './host/settings-store.mjs';
+
+export const name = 'dsh-laodi';
+export const inject = ['webServer'];
+
+export const ROUTE_PREFIX = '/dsh-laodi-9101';
+
+function trace(line) {
+  try {
+    const home = process.env.DSH_HOME || path.join(homedir(), '.dsh');
+    mkdirSync(home, { recursive: true });
+    appendFileSync(path.join(home, 'dsh-laodi.log'), `[${new Date().toISOString()}] ${line}\n`, 'utf8');
+  } catch {
+    // ignore
+  }
+}
+
+function sendJson(res, status, body, headers = {}) {
+  const payload = Buffer.from(JSON.stringify(body ?? null), 'utf8');
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': payload.length,
+    ...headers,
+  });
+  res.end(payload);
+}
+
+async function readJson(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 256 * 1024) throw new Error('request body too large');
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return null;
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function mergeLiveSettings(rowConfig = {}, userSettings = {}) {
+  return normalizeSettings({
+    ...DEFAULT_SETTINGS,
+    ...rowConfig,
+    ...userSettings,
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * DSH 状态（对外只给元信息，不回显密钥明文）
+ * ------------------------------------------------------------------ */
+
+/** 密钥来源的中文说明（设置页直接显示，不回显明文） */
+function keySourceLabel(source) {
+  switch (source) {
+    case 'process.env':
+      return '进程环境变量';
+    case '.env':
+      return '~/.dsh/.env';
+    case 'explicit':
+      return '设置页手填';
+    case 'explicit-empty':
+      return '设置页手填（已清空）';
+    case 'local-gateway':
+      return '本机网关占位（不校验）';
+    case 'missing':
+      return '未找到';
+    case 'none':
+      return '未设置 apiKeyEnv';
+    default:
+      return source || '未知';
+  }
+}
+
+/** provider 的对外信息（密钥只给状态，不给明文） */
+function publicProvider(provider, env = process.env) {
+  const status = providerKeyStatus(provider, env);
+  return {
+    id: provider.id,
+    providerId: provider.providerId,
+    name: provider.name,
+    api: provider.api,
+    apiKeyEnv: status.apiKeyEnv,
+    baseURL: provider.baseURL,
+    supportsImage: provider.supportsImage,
+    hasApiKey: status.hasApiKey,
+    keySource: status.keySource,
+    keySourceLabel: keySourceLabel(status.keySource),
+    localGateway: status.localGateway,
+    models: provider.models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      input: model.input,
+      supportsImage: model.supportsImage,
+    })),
+  };
+}
+
+/**
+ * 一次性读完 DSH 状态，摊平成设置页要用的两张表。
+ *
+ * （以前 /config 会各读一遍 settings.yaml 和 .env：publicDshState 一次、
+ * flattenDshModels 又一次。现在只读一次。）
+ *
+ * @returns {{dsh: object, dshProviders: object[], dshModels: object[]}}
+ */
+function describeDsh(env = process.env) {
+  const state = readDshState(env);
+  const dshProviders = state.providers.map((provider) => publicProvider(provider, env));
+  const dshModels = [];
+  for (const provider of dshProviders) {
+    for (const model of provider.models) {
+      dshModels.push({
+        providerId: provider.id,
+        providerName: provider.name,
+        id: model.id,
+        name: model.name,
+        input: model.input,
+        supportsImage: model.supportsImage,
+        baseURL: provider.baseURL,
+        apiKeyEnv: provider.apiKeyEnv,
+        hasApiKey: provider.hasApiKey,
+        keySource: provider.keySource,
+        keySourceLabel: provider.keySourceLabel,
+        localGateway: provider.localGateway,
+      });
+    }
+  }
+  const dsh = {
+    home: state.home,
+    settingsFile: state.settingsFile,
+    envFile: state.envFile,
+    settingsOk: state.settingsOk,
+    settingsError: state.settingsError,
+    source: state.source,
+    defaultProvider: state.defaultProvider,
+    defaultModel: state.defaultModel,
+    providers: dshProviders,
+  };
+  return { dsh, dshProviders, dshModels };
+}
+
+/* ------------------------------------------------------------------ *
+ * 宿主
+ * ------------------------------------------------------------------ */
+
+function buildHostParts(live, logger) {
+  const target = resolveVisionTarget({
+    providerId: live.visionProviderId,
+    model: live.visionModel,
+    baseURL: live.visionBaseURL,
+    // 空串 = 用 DSH provider 自己的密钥；不要把 '' 当成「显式清空」
+    apiKey: live.visionApiKey || undefined,
+    apiKeyEnv: live.visionApiKeyEnv,
+  });
+  const hostConfig = loadConfig({
+    overrides: {
+      captureIntervalSec: live.captureIntervalSec,
+      minSpeakGapSec: live.minSpeakGapSec,
+      speakProbability: live.speakProbability,
+      bubbleMaxChars: live.bubbleMaxChars,
+      vision: {
+        baseURL: target.baseURL,
+        model: target.model,
+        apiKey: live.visionMock ? '' : target.apiKey,
+        mock: live.visionMock,
+      },
+    },
+  });
+  const vision = createVisionClient(hostConfig);
+  const host = createHost({
+    config: hostConfig,
+    vision,
+    logger: {
+      info: (...args) => (logger.info ? logger.info(...args) : console.log(...args)),
+      warn: (...args) => (logger.warn ? logger.warn(...args) : console.warn(...args)),
+      error: (...args) => (logger.error ? logger.error(...args) : console.error(...args)),
+      log: (...args) => console.log(...args),
+    },
+  });
+  return { host, hostConfig, vision, target };
+}
+
+export function apply(ctx, config = {}) {
+  trace(`apply() entered (pid ${process.pid})`);
+  const logger = ctx?.logger ?? console;
+  const user = readUserSettings();
+  let live = mergeLiveSettings(config, user.settings);
+  let parts = buildHostParts(live, logger);
+
+  const restartHost = (nextLive) => {
+    try {
+      parts.host.stop();
+    } catch {
+      // ignore
+    }
+    live = nextLive;
+    parts = buildHostParts(live, logger);
+    if (live.enabled) {
+      parts.host.start();
+      if (live.calibrateDate) {
+        try {
+          parts.host.setCalibration?.(live.calibrateDate);
+        } catch {
+          // ignore
+        }
+      }
+      trace(`host restarted model=${parts.hostConfig.vision.model} mock=${parts.vision.isMock}`);
+    } else {
+      trace('host not started (enabled=false)');
+    }
+  };
+
+  if (live.enabled) {
+    parts.host.start();
+    if (live.calibrateDate) {
+      try {
+        parts.host.setCalibration?.(live.calibrateDate);
+      } catch {
+        // ignore
+      }
+    }
+    trace(`host started model=${parts.hostConfig.vision.model} mock=${parts.vision.isMock}`);
+  } else {
+    trace('host not started (enabled=false)');
+  }
+
+  if (typeof ctx?.effect === 'function') {
+    ctx.effect(
+      () => () => {
+        try {
+          parts.host.stop();
+          trace('host stopped');
+        } catch (err) {
+          trace(`host stop error: ${err?.message || err}`);
+        }
+      },
+      'dsh-laodi: host loop',
+    );
+
+    if (ctx.webServer && typeof ctx.webServer.register === 'function') {
+      ctx.effect(
+        () =>
+          ctx.webServer.register({
+            kind: 'prefix',
+            path: ROUTE_PREFIX,
+            handler: async (req, res) => {
+              try {
+                const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+                await handleRoute(req, res, url);
+              } catch (error) {
+                sendJson(res, 500, {
+                  ok: false,
+                  reason: 'internal',
+                  message: error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          }),
+        'dsh-laodi: settings routes',
+      );
+    } else {
+      trace('webServer missing; settings card API not registered');
+    }
+  }
+
+  async function handleRoute(req, res, url) {
+    const route = url.pathname.slice(ROUTE_PREFIX.length) || '/';
+    const method = (req.method ?? 'GET').toUpperCase();
+
+    if (method === 'GET' && (route === '/' || route === '/config')) {
+      const { dsh, dshProviders, dshModels } = describeDsh();
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          config: publicSettings(live),
+          defaults: DEFAULT_SETTINGS,
+          magpie: {
+            baseURL: parts.target.baseURL,
+            model: parts.target.model,
+            models: parts.target.models,
+            source: parts.target.source,
+            providerId: parts.target.providerId,
+            providerName: parts.target.providerName,
+            apiKeyEnv: parts.target.apiKeyEnv,
+            hasApiKey: parts.target.hasApiKey,
+            keySource: parts.target.keySource,
+            keySourceLabel: keySourceLabel(parts.target.keySource),
+            localGateway: parts.target.localGateway,
+          },
+          dsh,
+          dshProviders,
+          dshModels,
+          runtime: {
+            enabled: live.enabled,
+            visionModel: parts.hostConfig.vision.model,
+            visionBaseURL: parts.hostConfig.vision.baseURL,
+            visionProviderId: parts.target.providerId,
+            mock: parts.vision.isMock,
+          },
+        },
+        { 'cache-control': 'no-store' },
+      );
+      return;
+    }
+
+    if (method === 'POST' && route === '/config') {
+      const body = (await readJson(req)) ?? {};
+      const accepted = {};
+      for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) accepted[key] = body[key];
+      }
+      // 设置页不回传明文 Key：空字符串表示不改；特殊哨兵清空
+      if (accepted.visionApiKey === '__KEEP__' || accepted.visionApiKey === '__SET__') {
+        delete accepted.visionApiKey;
+      } else if (accepted.visionApiKey === '__CLEAR__') {
+        accepted.visionApiKey = '';
+      }
+
+      // 新增 / 编辑 DSH provider：写回 ~/.dsh/settings.yaml 的 llm-pi-ai.providers.*
+      let dshWrite = null;
+      if (body.dshProviderEdit && typeof body.dshProviderEdit === 'object') {
+        try {
+          const state = readDshState();
+          const wantedId = String(
+            body.dshProviderEdit.id ?? body.dshProviderEdit.providerId ?? '',
+          ).trim();
+          const existing = state.providers.find((provider) => provider.id === wantedId) ?? null;
+          const spec = normalizeProviderSpec(body.dshProviderEdit, existing);
+          const written = upsertDshProvider(spec);
+          dshWrite = { ok: true, id: spec.id, file: written.file, backup: written.backup };
+          trace(`dsh provider saved: ${spec.id}`);
+        } catch (error) {
+          sendJson(res, 400, {
+            ok: false,
+            reason: 'dsh-provider-invalid',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
+      }
+
+      const written = writeUserSettings(accepted);
+      restartHost(mergeLiveSettings(config, written.settings));
+      const { dsh, dshProviders, dshModels } = describeDsh();
+      sendJson(res, 200, {
+        ok: true,
+        persisted: true,
+        file: written.file,
+        dshWrite,
+        config: publicSettings(live),
+        dsh,
+        dshProviders,
+        dshModels,
+        runtime: {
+          enabled: live.enabled,
+          visionModel: parts.hostConfig.vision.model,
+          visionBaseURL: parts.hostConfig.vision.baseURL,
+          visionProviderId: parts.target.providerId,
+          mock: parts.vision.isMock,
+        },
+      });
+      return;
+    }
+
+    if (method === 'POST' && route === '/once') {
+      try {
+        const result = await parts.host.runOnce?.();
+        sendJson(res, 200, { ok: true, result });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          reason: 'once-failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (method === 'GET' && route === '/probe') {
+      try {
+        const result = await parts.host.tick?.();
+        sendJson(res, 200, { ok: true, result }, { 'cache-control': 'no-store' });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (method === 'POST' && route === '/vision/test') {
+      const body = (await readJson(req)) ?? {};
+      const sentKey = typeof body.visionApiKey === 'string' ? body.visionApiKey : '';
+      const apiKey =
+        sentKey && sentKey !== '__KEEP__' && sentKey !== '__SET__' && sentKey !== '__CLEAR__'
+          ? sentKey
+          : live.visionApiKey || undefined;
+      const target = resolveVisionTarget({
+        providerId: body.visionProviderId || live.visionProviderId,
+        model: body.visionModel || live.visionModel,
+        baseURL: body.visionBaseURL || live.visionBaseURL,
+        apiKey,
+        apiKeyEnv: body.visionApiKeyEnv || live.visionApiKeyEnv,
+      });
+      const client = createVisionClient({
+        vision: { baseURL: target.baseURL, model: target.model, apiKey: target.apiKey, mock: false },
+      });
+      const pixel =
+        'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACESURBVFhH7dFBCsAgDETRHsz7n6J3SclCkPKjpi1oYRZv6eSDx1mKraQABSggHWB2DNG7SCqAjkXoPZkKoAOzaK+1fwCNZtFu1Q2gsado3ylg3wAaeYNuOH2BAroBjsayaLcaBjganUV7rX8EVHQgQu9JKsDRsTt6F0kHfE0BClgcUOwCO5sXy45ZFqUAAAAASUVORK5CYII=';
+      try {
+        const result = await client.describe({
+          imageBase64: pixel,
+          mimeType: 'image/png',
+          prompt:
+            '这是一张测试图。用不超过 10 个字描述，并输出 JSON：{"scene":"unknown","summary":"...","suggestion":"测试通过","spoilerLevel":0}',
+        });
+        sendJson(res, 200, {
+          ok: true,
+          mode: 'image',
+          result,
+          baseURL: target.baseURL,
+          model: target.model,
+          providerId: target.providerId,
+          providerName: target.providerName,
+          apiKeyEnv: target.apiKeyEnv,
+          keySource: target.keySource,
+          keySourceLabel: keySourceLabel(target.keySource),
+          hasApiKey: target.hasApiKey,
+        });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+          baseURL: target.baseURL,
+          model: target.model,
+          providerId: target.providerId,
+          apiKeyEnv: target.apiKeyEnv,
+          keySource: target.keySource,
+          keySourceLabel: keySourceLabel(target.keySource),
+        });
+      }
+      return;
+    }
+
+    sendJson(res, 404, { ok: false, reason: 'not-found', message: `no such route: ${route}` });
+  }
+
+  trace('apply() done');
+  return parts.host;
+}
+
+export default { name, inject, apply, ROUTE_PREFIX };

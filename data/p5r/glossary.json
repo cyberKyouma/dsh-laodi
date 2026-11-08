@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "game": "persona-5-royal",
+  "description": "P5R 名词速查：term 为术语，brief 为一句话解释。",
+  "items": [
+    {
+      "id": "gloss-persona",
+      "term": "Persona",
+      "brief": "召唤出来的超自然力量，也是人格面具的英文原词；同名不同面具能力不同。",
+      "spoilerLevel": 0,
+      "tags": ["system", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-wildcard",
+      "term": "面具卡（Wild Card）",
+      "brief": "在花坛合成 Persona 的核心道具；合成后可以融合或分解。",
+      "spoilerLevel": 0,
+      "tags": ["system", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-stigma",
+      "term": "耻辱（Stigma）",
+      "brief": "世界里的负面情绪实体；清掉对应耻辱能让目标更干净。",
+      "spoilerLevel": 1,
+      "tags": ["system", "palace"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-palace",
+      "term": "异世界（Palace）",
+      "brief": "映射现实扭曲心理的地点；打穿异世界会改变现实中的对应事件。",
+      "spoilerLevel": 1,
+      "tags": ["system", "main"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-hand-swap",
+      "term": "换手（Hand Swap）",
+      "brief": "把当前 Persona 与队友交换来用的指令，战斗中可反复切换面具。",
+      "spoilerLevel": 0,
+      "tags": ["combat", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-showtime",
+      "term": "高光时刻（Showtime）",
+      "brief": "满足条件后触发的强化连携；同一次战斗里通常只能放一次。",
+      "spoilerLevel": 0,
+      "tags": ["combat", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-all-out-attack",
+      "term": "总攻击（All-out Attack）",
+      "brief": "队友全部耗尽后触发的全员处决，伤害随剩余意志提升。",
+      "spoilerLevel": 0,
+      "tags": ["combat", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-time-slot",
+      "term": "时间段（Time Slot）",
+      "brief": "放学后的行动时段；时间段会推进，影响当天可做的事件。",
+      "spoilerLevel": 0,
+      "tags": ["calendar", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-confidant",
+      "term": "同伴（Confidant）",
+      "brief": "课外活动对象；好感度到一定程度才会解锁个人剧情与能力。",
+      "spoilerLevel": 0,
+      "tags": ["bond", "basic"],
+      "source": "p5r-glossary"
+    },
+    {
+      "id": "gloss-thieves",
+      "term": "怪盗团（Phantom Thieves）",
+      "brief": "涩谷的怪盗团体；每次行动都要先在花坛选好面具再出发。",
+      "spoilerLevel": 1,
+      "tags": ["story", "main"],
+      "source": "p5r-glossary"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+- insert:
+    - id: dsh-laodi
+      name: dsh-laodi
+      config:
+        enabled: true
+        captureIntervalSec: 100
+        minSpeakGapSec: 180
+        speakProbability: 0.3
+        bubbleMaxChars: 40
+        visionBaseURL: ''
+        visionModel: ''
+        visionApiKey: ''
+        visionMock: false
+        calibrateDate: ''

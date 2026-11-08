@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "game": "persona-5-royal",
+  "description": "P5R 日历条目：考试、限时活动、委托 deadline。date 为游戏内日期 MM/DD。",
+  "items": [
+    {
+      "id": "cal-0507-kaneshiro-museum",
+      "title": "神保町美术馆委托",
+      "date": "05/07",
+      "endDate": null,
+      "timeSlot": null,
+      "type": "quest",
+      "detail": "怪盗团首次公开亮相；完成后开启下一条主线与部分支线。",
+      "spoilerLevel": 2,
+      "tags": ["quest", "main", "kaneshiro"],
+      "source": "p5r-quest-log"
+    },
+    {
+      "id": "cal-0705-midterm-review",
+      "title": "期中考试复习周",
+      "date": "07/05",
+      "endDate": "07/19",
+      "timeSlot": null,
+      "type": "limited",
+      "detail": "复习周期间图书馆开放备考事件，错过不影响考试本身。",
+      "spoilerLevel": 0,
+      "tags": ["exam", "limited", "school"],
+      "source": "p5r-calendar"
+    },
+    {
+      "id": "cal-0720-midterm-exam",
+      "title": "期中考试",
+      "date": "07/20",
+      "endDate": null,
+      "timeSlot": null,
+      "type": "exam",
+      "detail": "上午与下午各一场；成绩会影响校内评价与部分同伴好感事件。",
+      "spoilerLevel": 0,
+      "tags": ["exam", "school"],
+      "source": "p5r-calendar"
+    },
+    {
+      "id": "cal-0923-kusaka-audit",
+      "title": "财阀监查委托",
+      "date": "09/23",
+      "endDate": null,
+      "timeSlot": null,
+      "type": "quest",
+      "detail": "主线推进日；完成后部分道路与设施开放，战斗难度上升。",
+      "spoilerLevel": 2,
+      "tags": ["quest", "main", "palace"],
+      "source": "p5r-quest-log"
+    },
+    {
+      "id": "cal-1018-graduation-trip",
+      "title": "毕业旅行",
+      "date": "10/18",
+      "endDate": null,
+      "timeSlot": null,
+      "type": "quest",
+      "detail": "全员好感度达标后触发，可选择同行的同伴；错过会延后触发。",
+      "spoilerLevel": 3,
+      "tags": ["quest", "bond", "main"],
+      "source": "p5r-quest-log"
+    },
+    {
+      "id": "cal-1118-final-exam",
+      "title": "期末考试",
+      "date": "11/18",
+      "endDate": null,
+      "timeSlot": null,
+      "type": "exam",
+      "detail": "期末两场；与毕业旅行之后的行动顺序相关。",
+      "spoilerLevel": 1,
+      "tags": ["exam", "school"],
+      "source": "p5r-calendar"
+    },
+    {
+      "id": "cal-1224-christmas-eve",
+      "title": "平安夜",
+      "date": "12/24",
+      "endDate": null,
+      "timeSlot": null,
+      "type": "event",
+      "detail": "可约的全员特殊夜晚；每个同伴各一次，错过会延后。",
+      "spoilerLevel": 3,
+      "tags": ["event", "bond"],
+      "source": "p5r-calendar"
+    }
+  ]
+}

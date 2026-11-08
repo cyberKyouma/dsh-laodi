@@ -1,0 +1,13 @@
+﻿node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.dsh-laodi/
+coverage/
+*.png
+*.jpg
+tmp/
+.local/

@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "game": "persona-5-royal",
+  "description": "P5R 特殊道具日：date 为游戏内日期 MM/DD，只在该日期出售或生效。",
+  "items": [
+    {
+      "id": "shop-0417-cafe-combo",
+      "name": "手作点心套餐",
+      "date": "04/17",
+      "item": "手作点心套餐",
+      "effect": "当日限定；饱腹度恢复效果翻倍。",
+      "worthBuyNote": "钱包紧时优先吃饭再做别的事，别把道具钱花光。",
+      "spoilerLevel": 0,
+      "tags": ["cafe", "date-limited", "food"],
+      "source": "p5r-shop"
+    },
+    {
+      "id": "shop-0503-may-potion",
+      "name": "五月之药",
+      "date": "05/03",
+      "item": "五月之药",
+      "effect": "持续数日提升经验获取，适合集中刷级。",
+      "worthBuyNote": "刷级期性价比高；赶剧情的日子可以先跳过。",
+      "spoilerLevel": 0,
+      "tags": ["item", "date-limited", "grind"],
+      "source": "p5r-shop"
+    },
+    {
+      "id": "shop-0612-youth-medicine",
+      "name": "青春之药",
+      "date": "06/12",
+      "item": "青春之药",
+      "effect": "短时间内大幅提升战斗能力。",
+      "worthBuyNote": "只在明确要打硬仗的日子用，闲逛日买了就是浪费。",
+      "spoilerLevel": 0,
+      "tags": ["item", "date-limited", "battle"],
+      "source": "p5r-shop"
+    },
+    {
+      "id": "shop-0808-accessory-set",
+      "name": "饰品套装折扣",
+      "date": "08/08",
+      "item": "饰品套装",
+      "effect": "全套饰品小幅提升各项属性。",
+      "worthBuyNote": "按角色数值缺口挑单品，不必整套买齐。",
+      "spoilerLevel": 1,
+      "tags": ["sale", "accessory", "date-limited"],
+      "source": "p5r-shop"
+    },
+    {
+      "id": "shop-1025-soul-food",
+      "name": "灵魂食物",
+      "date": "10/25",
+      "item": "灵魂食物",
+      "effect": "恢复少量生命，同时临时提升能力。",
+      "worthBuyNote": "只有一条命的时候留到关键战再用。",
+      "spoilerLevel": 2,
+      "tags": ["item", "date-limited", "battle", "dungeon"],
+      "source": "p5r-shop"
+    }
+  ]
+}

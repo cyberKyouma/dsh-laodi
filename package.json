@@ -1,0 +1,67 @@
+{
+  "name": "dsh-laodi",
+  "version": "0.2.4",
+  "private": true,
+  "type": "module",
+  "description": "老弟：P5R 陪玩插件（小时候看着你玩电脑的弟弟）— 识屏建议、找攻略、记事提醒",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "start:mock": "node src/index.mjs --mock --once",
+    "start:magpie": "node --env-file=.env src/index.mjs",
+    "probe:magpie": "node scripts/probe-magpie.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:policy": "node scripts/smoke-policy.mjs",
+    "smoke:mvp": "node scripts/smoke-mvp.mjs",
+    "smoke:all": "node scripts/smoke.mjs && node scripts/smoke-mvp.mjs"
+  },
+  "keywords": [
+    "persona5",
+    "p5r",
+    "dsh",
+    "overlay",
+    "windows",
+    "companion"
+  ],
+  "author": "dsh-laodi",
+  "license": "UNLICENSED",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "src",
+    "data",
+    "runtime",
+    "scripts",
+    "docs",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml",
+      "id": "dsh-laodi",
+      "displayName": "老弟 · P5R",
+      "version": "0.2.4"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  },
+  "displayName": "老弟 · P5R"
+}

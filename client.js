@@ -490,6 +490,10 @@ window.__ModuleLoader__.load({
             h('span', {
               className: NS + '-pill ' + (sessionMeta.attached ? NS + '-pill--ok' : NS + '-pill--bad'),
             }, sessionMeta.attached ? '已挂' : '未挂'),
+            ' 侧栏：',
+            h('span', {
+              className: NS + '-pill ' + (sessionMeta.revealed ? NS + '-pill--ok' : NS + '-pill--bad'),
+            }, sessionMeta.revealed ? '可见' : '空白隐藏'),
             sessionMeta.companionSessionId
               ? (' · id ' + sessionMeta.companionSessionId)
               : ' · 尚未创建',
@@ -525,7 +529,7 @@ window.__ModuleLoader__.load({
             }, busy === 'session-reset' ? '重置中…' : '重置 Session'),
           ),
           h('div', { className: NS + '-hint' },
-            '提问走 POST /ask → followup；主动开口默认不写入 Session。重启 DSH 后会按 companionSessionId resume。',
+            '确保 Session 会发一句开场，否则 DSH 会把空白会话从侧栏藏掉。提问走 POST /ask → followup；「立刻试一轮」不写入 Session。',
           ),
         ),
         h('div', { className: NS + '-card' },

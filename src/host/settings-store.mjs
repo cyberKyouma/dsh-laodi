@@ -34,6 +34,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   petPluginId: '',
   /** 固定陪玩 DSH Session id（空 = 尚未创建） */
   companionSessionId: '',
+  /** 已发过开场/提问、侧栏可见的 Session id（空白会话会被 DSH 藏掉） */
+  companionSessionRevealedId: '',
   /** 截图是否以附件进 Session；默认 false，只 inject 文字摘要 */
   sessionAttachImages: false,
 });
@@ -99,6 +101,7 @@ export function normalizeSettings(raw = {}) {
     personaPluginId: str(source.personaPluginId),
     petPluginId: str(source.petPluginId),
     companionSessionId: str(source.companionSessionId),
+    companionSessionRevealedId: str(source.companionSessionRevealedId),
     sessionAttachImages: Boolean(source.sessionAttachImages),
   };
 }

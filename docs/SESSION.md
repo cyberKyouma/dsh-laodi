@@ -83,6 +83,7 @@
 - [x] 设置页展示 Session 状态：id、是否存活、一键新建/重置
 - [x] 进程重启后 resume 同一条 Session（依赖 DSH 持久化 + 本插件存 id）
 - [x] 建会话带 `meta.cwd` = 工作区目录（否则落到 `~/.dsh/sessions/_no-cwd/`，侧边栏认不出）
+- [x] 「确保 Session」/「重置 Session」后发一句开场 followup：DSH 侧栏会隐藏 `sessionListMetadata.blank=true` 的空白会话；已揭晓的 id 记在 `companionSessionRevealedId`，不重复打招呼。「立刻试一轮」仍不入 Session。
 - [x] `agents.resume({ resumeSessionId })`：参数名对齐 DSH
 - [x] 老会话 cwd 缺失 / 与工作区不一致 → 丢弃并另建，不硬用
 - [x] 工作区登记与挂载优先走官方 `ctx.workspaceRegistry`（没有则退回写 workspace.json）

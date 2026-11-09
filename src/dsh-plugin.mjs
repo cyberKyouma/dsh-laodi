@@ -426,9 +426,11 @@ export function apply(ctx, config = {}) {
     if (method === 'POST' && route === '/session/ensure') {
       try {
         const ensured = await sessionManager.ensure();
+        const unveiled = ensured.ok ? await sessionManager.unveil() : null;
         sendJson(res, 200, {
           ok: Boolean(ensured.ok),
           ...ensured,
+          unveiled,
           session: sessionManager.describe(),
           config: publicSettings(live),
         });
@@ -446,9 +448,11 @@ export function apply(ctx, config = {}) {
     if (method === 'POST' && route === '/session/reset') {
       try {
         const reset = await sessionManager.reset();
+        const unveiled = reset.ok ? await sessionManager.unveil() : null;
         sendJson(res, 200, {
           ok: Boolean(reset.ok),
           ...reset,
+          unveiled,
           session: sessionManager.describe(),
           config: publicSettings(live),
         });

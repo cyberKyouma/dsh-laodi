@@ -704,6 +704,80 @@ await test('agents 不可用时 askCompanion 降级 askOnce', async () => {
   assert.equal(result.answer.source, 'glossary');
 });
 
+
+await test('「确保 Session」开场揭晓空白会话，resume 已揭晓时不再打招呼', async () => {
+  const { createCompanionSessionManager, SESSION_UNVEIL_PROMPT } = await import('../src/host/session.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-unveil-'));
+  const followups = [];
+  const agentsById = new Map();
+  function makeAgent(id, cwd) {
+    return {
+      id,
+      status: 'idle',
+      session: { id, header: { cwd } },
+      inject() {},
+      followup(msg) {
+        followups.push(msg);
+        this.lastAssistantText = '嗨';
+      },
+      whenIdle: async () => {},
+    };
+  }
+  const agents = {
+    get(id) {
+      return agentsById.get(id) || null;
+    },
+    async create({ sessionId, meta }) {
+      const agent = makeAgent(sessionId, meta?.cwd || tmpHome);
+      agentsById.set(sessionId, agent);
+      return { agent, async dispose() { agentsById.delete(sessionId); } };
+    },
+    async resume({ resumeSessionId, sessionId }) {
+      const id = resumeSessionId || sessionId;
+      const agent = agentsById.get(id) || makeAgent(id, tmpHome);
+      agentsById.set(id, agent);
+      return { agent, async dispose() {} };
+    },
+  };
+  const store = { companionSessionId: '', companionSessionRevealedId: '', workspacePath: tmpHome, workspaceTitle: '陪玩' };
+  const prevEnv = process.env.DSH_HOME;
+  process.env.DSH_HOME = tmpHome;
+  try {
+    const session = createCompanionSessionManager({
+      getAgents: () => agents,
+      getSettings: () => store,
+      persistSettings: (patch) => {
+        Object.assign(store, patch);
+        return store;
+      },
+    });
+    const first = await session.ensure();
+    assert.equal(first.ok, true);
+    assert.equal(followups.length, 0, 'ensure() 本身不发开场，避免 /ask 顺便打招呼');
+    const unveiled = await session.unveil();
+    assert.equal(unveiled.ok, true);
+    assert.equal(unveiled.unveiled, true);
+    assert.equal(followups.length, 1);
+    assert.ok(String(followups[0]?.content?.[0]?.text || '').includes('P5R'));
+    assert.equal(store.companionSessionRevealedId, first.sessionId);
+    assert.equal(session.describe().revealed, true);
+    assert.equal(SESSION_UNVEIL_PROMPT.includes('P5R'), true);
+
+    const again = await session.unveil();
+    assert.equal(again.skipped, true);
+    assert.equal(followups.length, 1, '已揭晓后不再重复开场');
+
+    // followupAsk 成功后也应记下 revealed（提问同样能揭晓）
+    store.companionSessionRevealedId = '';
+    const asked = await session.followupAsk('还在吗');
+    assert.equal(asked.ok, true);
+    assert.equal(store.companionSessionRevealedId, first.sessionId);
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prevEnv;
+  }
+});
+
 console.log('companion workspace:');
 
 await test('ensureCompanionWorkspace 会登记到 storages/workspace.json', async () => {

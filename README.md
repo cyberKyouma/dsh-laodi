@@ -92,7 +92,7 @@ node --env-file=.env src/index.mjs
 
 陪玩会话建出来时会带上工作区目录当 cwd（`ctx.agents.create({ meta: { cwd } })`）：
 
-- 会话存到 `~/.dsh/sessions/<工作区目录>/`，侧边栏「陪玩」工作区里能直接看到；
+- 会话存到 `~/.dsh/sessions/<工作区目录>/`，侧边栏「陪玩」工作区里能直接看到（需先点「确保 Session」发开场，否则空白会话会被隐藏）；
 - 没有 cwd 的老会话会落在 `~/.dsh/sessions/_no-cwd/`，DSH 不认它属于哪个工作区——插件检测到就会另建一条；
 - 设置页的「多轮 Session」卡片会显示当前会话的落盘目录（cwd）与是否已挂到工作区。
 

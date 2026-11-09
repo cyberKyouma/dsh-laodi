@@ -25,6 +25,8 @@ import {
 export const SESSION_SOURCE = Object.freeze({ kind: 'dsh-laodi' });
 export const USER_SOURCE = Object.freeze({ kind: 'user' });
 export const DEFAULT_SESSION_TITLE = '陪玩';
+/** 点「确保 Session」时发的开场，让 DSH 把空白会话从侧栏里显示出来。 */
+export const SESSION_UNVEIL_PROMPT = '先打个招呼，我在玩 P5R。';
 
 /** 比较两个目录是不是同一个（Windows 大小写不敏感）。 */
 export function samePath(a, b) {
@@ -207,14 +209,65 @@ export function createCompanionSessionManager(options = {}) {
       cwd: readSessionCwd(live || handle?.agent) || lastCwd || '',
       targetCwd: lastTargetCwd || String(workspace?.path || ''),
       attached: Boolean(id && (workspace?.sessionIds || []).includes(id)),
+      revealed: Boolean(id && currentRevealedId() === id),
       title: sessionTitle,
       lastAttach: lastAttach || null,
     };
   }
 
   function persistId(sessionId) {
-    const next = persistSettings({ companionSessionId: String(sessionId || '') });
-    return String(next?.companionSessionId || sessionId || '').trim();
+    const id = String(sessionId || '').trim();
+    const patch = { companionSessionId: id };
+    if (!id) patch.companionSessionRevealedId = '';
+    const next = persistSettings(patch);
+    return String(next?.companionSessionId || id).trim();
+  }
+
+  function currentRevealedId() {
+    return String(getSettings()?.companionSessionRevealedId || '').trim();
+  }
+
+  function persistRevealedId(sessionId) {
+    const id = String(sessionId || '').trim();
+    const next = persistSettings({ companionSessionRevealedId: id });
+    return String(next?.companionSessionRevealedId || id).trim();
+  }
+
+  /**
+   * DSH 侧栏会藏掉空白会话（sessionListMetadata.blank=true）。
+   * 发一句用户开场让它可见；已揭晓的会话不重复。
+   * 不要从 ensure() 里调，否则 /ask 的 ensure 也会冒打招呼。
+   */
+  async function unveil(sessionId = currentId()) {
+    const id = String(sessionId || currentId() || '').trim();
+    if (!id) {
+      return { ok: false, unveiled: false, reason: 'no-session' };
+    }
+    if (currentRevealedId() === id) {
+      return { ok: true, unveiled: false, skipped: true, sessionId: id };
+    }
+    const agent = handle?.agent;
+    if (!agent || typeof agent.followup !== 'function') {
+      trace('session unveil skipped: agent.followup missing');
+      return { ok: false, unveiled: false, reason: 'agent-followup-missing', sessionId: id };
+    }
+    try {
+      agent.followup(textMessage(SESSION_UNVEIL_PROMPT, USER_SOURCE));
+      lastAskAt = new Date().toISOString();
+      lastMode = 'session';
+      lastError = '';
+      if (typeof agent.whenIdle === 'function') {
+        await Promise.race([agent.whenIdle(), sleep(idleTimeoutMs)]);
+      }
+      persistRevealedId(id);
+      const reply = extractAssistantReply(agent, handle);
+      trace(`session unveiled ${id}`);
+      return { ok: true, unveiled: true, sessionId: id, reply };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      trace(`session unveil failed: ${message}`);
+      return { ok: false, unveiled: false, reason: 'unveil-failed', message, sessionId: id };
+    }
   }
 
   /**
@@ -578,6 +631,7 @@ export function createCompanionSessionManager(options = {}) {
           await Promise.race([agent.whenIdle(), sleep(idleTimeoutMs)]);
         }
         const reply = extractAssistantReply(agent, handle);
+        persistRevealedId(ensured.sessionId || currentId());
         return {
           ok: true,
           mode: 'session',
@@ -598,6 +652,7 @@ export function createCompanionSessionManager(options = {}) {
       }
 
       const reply = extractAssistantReply(agent, handle);
+      persistRevealedId(ensured.sessionId || currentId());
       return {
         ok: true,
         mode: 'session',
@@ -655,6 +710,7 @@ export function createCompanionSessionManager(options = {}) {
   return {
     ensure,
     followupAsk,
+    unveil,
     reset,
     dispose: disposeHandle,
     describe,
@@ -675,6 +731,7 @@ export default {
   extractAssistantReply,
   createCompanionSessionManager,
   DEFAULT_SESSION_TITLE,
+  SESSION_UNVEIL_PROMPT,
   SESSION_SOURCE,
   USER_SOURCE,
 };

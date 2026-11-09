@@ -1,9 +1,9 @@
 {
   "name": "dsh-laodi",
-  "version": "0.2.4",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
-  "description": "老弟：P5R 陪玩插件（小时候看着你玩电脑的弟弟）— 识屏建议、找攻略、记事提醒",
+  "description": "陪玩：识屏建议、找攻略、记事提醒（DSH 插件）",
   "main": "index.js",
   "engines": {
     "node": ">=20.10.0"
@@ -49,8 +49,8 @@
     "bundle": {
       "patch": "./cordis.patch.yml",
       "id": "dsh-laodi",
-      "displayName": "老弟 · P5R",
-      "version": "0.2.4"
+      "displayName": "陪玩",
+      "version": "0.2.6"
     },
     "client": {
       "platform": "web",
@@ -63,5 +63,5 @@
       }
     }
   },
-  "displayName": "老弟 · P5R"
+  "displayName": "陪玩"
 }

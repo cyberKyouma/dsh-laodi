@@ -215,6 +215,47 @@ window.__ModuleLoader__.load({
         });
       };
 
+      const ensureWorkspace = async function () {
+        setBusy('workspace');
+        setOutput('正在创建/登记专用工作区…');
+        try {
+          const response = await fetch(ROUTE + '/workspace/ensure', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              workspacePath: (config && config.workspacePath) || '',
+              workspaceTitle: (config && config.workspaceTitle) || '',
+              workspaceId: (config && config.workspaceId) || '',
+              setWorkspaceDefault: !!(config && config.setWorkspaceDefault),
+              personaPresetId: (config && config.personaPresetId) || 'laodi',
+              personaPluginId: (config && config.personaPluginId) || '',
+              petPluginId: (config && config.petPluginId) || '',
+            }),
+          });
+          const payload = await response.json();
+          if (!payload || !payload.ok) {
+            throw new Error((payload && payload.message) || 'ensure workspace failed');
+          }
+          if (payload.config) setConfig(payload.config);
+          if (payload.workspace) setMeta(function (previous) {
+            return Object.assign({}, previous || {}, { workspace: payload.workspace });
+          });
+          setOutput(
+            (payload.hint || '工作区已就绪') +
+              '\n' +
+              JSON.stringify(payload.ensured || payload.workspace, null, 2),
+          );
+          setError(null);
+          void load();
+        } catch (cause) {
+          const text = String((cause && cause.message) || cause);
+          setError(text);
+          setOutput('工作区失败：' + text);
+        } finally {
+          setBusy(null);
+        }
+      };
+
       const runOnce = async function () {
         setBusy('once');
         setOutput('running...');
@@ -264,6 +305,10 @@ window.__ModuleLoader__.load({
       const dshProviders = (meta && meta.dshProviders) || [];
       const dshModels = (meta && meta.dshModels) || [];
       const dsh = (meta && meta.dsh) || {};
+      const workspaceMeta = (meta && meta.workspace) || {};
+      const workspaceRow = workspaceMeta.workspace || null;
+      const personas = (meta && meta.personas) || [];
+      const activePersona = (meta && meta.persona) || null;
 
       // 当前锁定的 provider（没锁就用运行中的那个）
       const providerId = config.visionProviderId || runtime.visionProviderId || '';
@@ -310,11 +355,71 @@ window.__ModuleLoader__.load({
       };
 
       return h('div', { className: NS + '-cfg' },
-        h('div', { className: NS + '-note' }, '小时候家里看着你玩电脑的弟弟：陪玩、找攻略、帮你记事。改完自动保存到本地 dsh-laodi.json；视觉默认走 DSH 已配置的 provider（Magpie 网关）。'),
+        h('div', { className: NS + '-note' }, '陪玩：识屏建议、找攻略、帮你记事。改完自动保存到本地；视觉默认走 DSH 已配置的 provider（Magpie 网关）。相关对话请放到下方「专用工作区」里，侧边栏会单独成组。'),
         saveState ? h('div', {
           className: NS + '-out',
           style: saveState.kind === 'ok' ? { color: '#2ea043' } : (saveState.kind === 'bad' ? { color: '#cf4444' } : undefined),
         }, saveState.text) : null,
+        h('div', { className: NS + '-card' },
+          h('h3', { className: NS + '-card__title' }, '专用工作区（DSH Session）'),
+          h('div', { className: NS + '-hint' },
+            '状态：',
+            h('span', {
+              className: NS + '-pill ' + (workspaceMeta.registered ? NS + '-pill--ok' : NS + '-pill--bad'),
+            }, workspaceMeta.registered ? '已登记' : '未登记'),
+            ' ',
+            h('span', {
+              className: NS + '-pill ' + (workspaceMeta.directoryExists ? NS + '-pill--ok' : ''),
+            }, workspaceMeta.directoryExists ? '目录在' : '目录未建'),
+            workspaceRow ? (' · ' + (workspaceRow.title || '') + ' · 会话 ' + (workspaceRow.sessionCount || 0)) : '',
+          ),
+          field('显示名', text('workspaceTitle', '陪玩'), '侧边栏工作区标题，类似「默认工作区」。'),
+          field(
+            '目录路径',
+            text('workspacePath', (workspaceMeta.defaultPath) || ''),
+            '留空则用默认：Documents/deepseek-harness/dsh-laodi。点「确保工作区」后写入 DSH 的 workspace 登记表。',
+          ),
+          field('设为默认', toggle('setWorkspaceDefault', '登记时设为侧边栏默认工作区')),
+          field(
+            '人格预设',
+            h('select', {
+              value: config.personaPresetId || 'laodi',
+              onChange: function (event) {
+                patch({ personaPresetId: event.currentTarget.value || 'laodi' }, { immediate: true });
+              },
+            },
+              (personas.length ? personas : [{ id: 'laodi', name: '老弟', description: '' }]).map(function (item) {
+                return h('option', { key: item.id, value: item.id },
+                  item.name + (item.isDefault ? '（默认）' : '') + ' · ' + item.id);
+              }),
+            ),
+            (activePersona && activePersona.description)
+              ? activePersona.description
+              : '默认「老弟」。点「确保工作区」会把该预设写入工作区 persona/SOUL.md。',
+          ),
+          field(
+            '人设插件（预留）',
+            text('personaPluginId', '例如 dsh-companion / dsh-assist'),
+            '先记包名，后续把 persona/SOUL.md·MEMORY.md 交给这些人设插件读。',
+          ),
+          field(
+            '桌宠插件（预留）',
+            text('petPluginId', '桌宠插件包名'),
+            '预留对接；标记文件 .dsh-laodi-workspace.json 可供桌宠共享工作区身份。',
+          ),
+          h('div', { className: NS + '-actions' },
+            h('button', {
+              className: NS + '-btn ' + NS + '-btn--primary',
+              onClick: ensureWorkspace,
+              disabled: busy === 'workspace',
+            }, busy === 'workspace' ? '登记中…' : '确保工作区'),
+          ),
+          h('div', { className: NS + '-hint' },
+            workspaceRow && workspaceRow.path
+              ? ('当前：' + workspaceRow.path + (workspaceRow.id ? ' · id ' + workspaceRow.id : ''))
+              : '还没登记：点「确保工作区」后，侧边栏「工作区」会出现「陪玩」，相关对话请都开在里面。',
+          ),
+        ),
         h('div', { className: NS + '-card' },
           h('h3', { className: NS + '-card__title' }, '开关与节奏'),
           field('启用', toggle('enabled', '开启陪玩主循环')),
@@ -420,7 +525,7 @@ window.__ModuleLoader__.load({
         ctx.effect(installStyles, 'dsh-laodi: styles');
         ctx.slots.inject('settings.section', function* () {
           yield ctx.slots.register(
-            { name: 'settings.section', id: 'dsh-laodi-config', order: 32, label: function () { return '老弟 · P5R'; } },
+            { name: 'settings.section', id: 'dsh-laodi-config', order: 32, label: function () { return '陪玩'; } },
             SettingsSection,
           );
         });

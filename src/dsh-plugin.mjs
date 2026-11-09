@@ -2,11 +2,13 @@
  * Cordis 宿主入口：主循环 + 设置页 HTTP API。
  *
  * 路由前缀 /dsh-laodi-9101：
- *   GET  /config      当前设置 + DSH 状态（dsh / dshProviders / dshModels）
- *   POST /config      保存设置；body.dshProviderEdit 可新增/编辑 DSH provider
- *   POST /once        立刻跑一轮
- *   GET  /probe       只探一屏
- *   POST /vision/test 测一下视觉
+ *   GET  /config         当前设置 + DSH 状态（dsh / dshProviders / dshModels）+ workspace
+ *   POST /config         保存设置；body.dshProviderEdit 可新增/编辑 DSH provider
+ *   GET  /workspace      专用工作区状态
+ *   POST /workspace/ensure  创建目录并登记到 DSH 工作区列表
+ *   POST /once           立刻跑一轮
+ *   GET  /probe          只探一屏
+ *   POST /vision/test    测一下视觉
  */
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -29,6 +31,16 @@ import {
   readUserSettings,
   writeUserSettings,
 } from './host/settings-store.mjs';
+import {
+  describeCompanionWorkspace,
+  ensureCompanionWorkspace,
+} from './host/workspace.mjs';
+import {
+  getPersonaPreset,
+  listPersonaPresets,
+  personaVisionHint,
+  resolvePersonaPresetId,
+} from './host/persona.mjs';
 
 export const name = 'dsh-laodi';
 export const inject = ['webServer'];
@@ -186,6 +198,7 @@ function buildHostParts(live, logger) {
     apiKey: live.visionApiKey || undefined,
     apiKeyEnv: live.visionApiKeyEnv,
   });
+  const personaPresetId = resolvePersonaPresetId(live.personaPresetId);
   const hostConfig = loadConfig({
     overrides: {
       captureIntervalSec: live.captureIntervalSec,
@@ -197,6 +210,12 @@ function buildHostParts(live, logger) {
         model: target.model,
         apiKey: live.visionMock ? '' : target.apiKey,
         mock: live.visionMock,
+        prompt:
+          `${personaVisionHint(getPersonaPreset(personaPresetId))}根据这张游戏截图判断场景，并输出 JSON：` +
+          '{"scene":"street|dialog|battle|menu|shop|unknown",' +
+          '"summary":"一句话画面描述",' +
+          '"suggestion":"给玩家的一句建议，不超过 40 字",' +
+          '"spoilerLevel":0|1|2|3}。没有依据时不要编造。',
       },
     },
   });
@@ -326,6 +345,25 @@ export function apply(ctx, config = {}) {
           dsh,
           dshProviders,
           dshModels,
+          workspace: describeCompanionWorkspace(live),
+          personas: listPersonaPresets().map((item) => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            isDefault: item.isDefault,
+            tags: item.tags,
+          })),
+          persona: (() => {
+            const preset = getPersonaPreset(live.personaPresetId);
+            return preset
+              ? {
+                  id: preset.id,
+                  name: preset.name,
+                  description: preset.description,
+                  isDefault: preset.isDefault,
+                }
+              : null;
+          })(),
           runtime: {
             enabled: live.enabled,
             visionModel: parts.hostConfig.vision.model,
@@ -336,6 +374,72 @@ export function apply(ctx, config = {}) {
         },
         { 'cache-control': 'no-store' },
       );
+      return;
+    }
+
+    if (method === 'GET' && route === '/workspace') {
+      sendJson(
+        res,
+        200,
+        { ok: true, workspace: describeCompanionWorkspace(live) },
+        { 'cache-control': 'no-store' },
+      );
+      return;
+    }
+
+    if (method === 'POST' && route === '/workspace/ensure') {
+      const body = (await readJson(req)) ?? {};
+      try {
+        const personaPresetId = resolvePersonaPresetId(
+          body.personaPresetId || live.personaPresetId,
+        );
+        const ensured = ensureCompanionWorkspace({
+          workspacePath: body.workspacePath || live.workspacePath,
+          workspaceTitle: body.workspaceTitle || live.workspaceTitle,
+          workspaceId: body.workspaceId || live.workspaceId,
+          setAsDefault:
+            typeof body.setWorkspaceDefault === 'boolean'
+              ? body.setWorkspaceDefault
+              : live.setWorkspaceDefault,
+          personaPresetId,
+          personaPluginId: body.personaPluginId || live.personaPluginId,
+          petPluginId: body.petPluginId || live.petPluginId,
+        });
+        const written = writeUserSettings({
+          workspacePath: ensured.workspace.path,
+          workspaceTitle: ensured.workspace.title,
+          workspaceId: ensured.workspace.id,
+          setWorkspaceDefault:
+            typeof body.setWorkspaceDefault === 'boolean'
+              ? body.setWorkspaceDefault
+              : live.setWorkspaceDefault,
+          personaPresetId,
+          personaPluginId:
+            typeof body.personaPluginId === 'string'
+              ? body.personaPluginId
+              : live.personaPluginId,
+          petPluginId:
+            typeof body.petPluginId === 'string' ? body.petPluginId : live.petPluginId,
+        });
+        restartHost(mergeLiveSettings(config, written.settings));
+        sendJson(res, 200, {
+          ok: true,
+          created: ensured.created,
+          hint: ensured.hint,
+          file: ensured.file,
+          ensured: ensured.workspace,
+          persona: ensured.persona,
+          seeded: ensured.seeded,
+          config: publicSettings(live),
+          workspace: describeCompanionWorkspace(live),
+        });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          reason: 'workspace-ensure-failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
 
@@ -375,18 +479,62 @@ export function apply(ctx, config = {}) {
         }
       }
 
+      if (Object.prototype.hasOwnProperty.call(accepted, 'personaPresetId')) {
+        accepted.personaPresetId = resolvePersonaPresetId(accepted.personaPresetId);
+      }
+
       const written = writeUserSettings(accepted);
       restartHost(mergeLiveSettings(config, written.settings));
+
+      // 人格变更且工作区已有路径时，同步写回 persona/SOUL.md
+      let personaApply = null;
+      if (
+        Object.prototype.hasOwnProperty.call(accepted, 'personaPresetId') &&
+        written.settings.workspacePath
+      ) {
+        try {
+          const { applyPersonaPreset } = await import('./host/persona.mjs');
+          personaApply = applyPersonaPreset(
+            written.settings.workspacePath,
+            written.settings.personaPresetId,
+          ).preset;
+        } catch (error) {
+          personaApply = {
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+
       const { dsh, dshProviders, dshModels } = describeDsh();
+      const persona = getPersonaPreset(live.personaPresetId);
       sendJson(res, 200, {
         ok: true,
         persisted: true,
         file: written.file,
         dshWrite,
+        personaApply: personaApply
+          ? { id: personaApply.id, name: personaApply.name, error: personaApply.error }
+          : null,
         config: publicSettings(live),
         dsh,
         dshProviders,
         dshModels,
+        personas: listPersonaPresets().map((item) => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          isDefault: item.isDefault,
+          tags: item.tags,
+        })),
+        persona: persona
+          ? {
+              id: persona.id,
+              name: persona.name,
+              description: persona.description,
+              isDefault: persona.isDefault,
+            }
+          : null,
+        workspace: describeCompanionWorkspace(live),
         runtime: {
           enabled: live.enabled,
           visionModel: parts.hostConfig.vision.model,

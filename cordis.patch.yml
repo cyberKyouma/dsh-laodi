@@ -12,3 +12,10 @@
         visionApiKey: ''
         visionMock: false
         calibrateDate: ''
+        workspacePath: ''
+        workspaceTitle: '陪玩'
+        workspaceId: ''
+        setWorkspaceDefault: false
+        personaPresetId: 'laodi'
+        personaPluginId: ''
+        petPluginId: ''

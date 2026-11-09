@@ -1,6 +1,6 @@
 # dsh-laodi
 
-「老弟」——小时候家里看着你玩电脑的弟弟。P5R 陪玩 DSH 插件（Windows）：低频识屏建议、问答找攻略、帮忙记事、悬浮窗提醒。
+陪玩 DSH 插件（Windows）：低频识屏建议、问答找攻略、帮忙记事、悬浮窗提醒。
 
 ## 分工
 - 架构 / 计划 / 验收：Grok Bot「游戏助手」
@@ -69,7 +69,23 @@ node --env-file=.env src/index.mjs
 
 ## 设置卡片
 
-装进 desktop 并重启后，设置里会出现 **「老弟 · P5R」** 分区：开关/识屏间隔/开口规则、Magpie 视觉模型、立刻试一轮 / 测一下视觉。配置落盘到 %USERPROFILE%\.dsh\dsh-laodi.json。
+装进 desktop 并重启后，设置里会出现 **「陪玩」** 分区：专用工作区、开关/识屏间隔/开口规则、Magpie 视觉模型、立刻试一轮 / 测一下视觉。配置落盘到 %USERPROFILE%\.dsh\dsh-laodi.json。
+
+### 专用工作区（DSH Session）
+
+陪玩相关对话建议都放在侧边栏单独的工作区里（类似「默认工作区」）：
+
+1. 打开设置 → **陪玩** → **专用工作区**
+2. 确认显示名 / 目录（默认 `%USERPROFILE%\Documents\deepseek-harness\dsh-laodi`）
+3. 点 **确保工作区**
+
+插件会：
+
+- 创建目录，并写入 `persona/SOUL.md`、`persona/MEMORY.md` 占位（后续可接人设插件）
+- 登记到 `%USERPROFILE%\.dsh\storages\workspace.json`，侧边栏「工作区」出现 **陪玩**
+- 在设置里记下 `workspaceId`，方便以后把 Session / 人设 / 桌宠绑到同一处
+
+默认人格预设是 **「老弟」**（`data/personas/laodi/`），可在设置里切换；写入工作区 `persona/SOUL.md`。人设插件（`personaPluginId`）与桌宠插件（`petPluginId`）字段仍预留，后续再对接。
 
 ## 装进 DSH（desktop）
 

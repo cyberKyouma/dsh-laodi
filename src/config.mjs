@@ -15,6 +15,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveMagpieVision } from './vision/magpie.mjs';
+import { getPersonaPreset, personaVisionHint } from './host/persona.mjs';
+
+function buildVisionPrompt(personaPresetId = 'laodi') {
+  const hint = personaVisionHint(getPersonaPreset(personaPresetId));
+  return (
+    `${hint}根据这张游戏截图判断场景，并输出 JSON：` +
+    '{"scene":"street|dialog|battle|menu|shop|unknown",' +
+    '"summary":"一句话画面描述",' +
+    '"suggestion":"给玩家的一句建议，不超过 40 字",' +
+    '"spoilerLevel":0|1|2|3}。没有依据时不要编造。'
+  );
+}
 
 /** @type {Readonly<object>} 出厂默认值（不可变，调用方请复制后再改） */
 export const DEFAULT_CONFIG = Object.freeze({
@@ -58,13 +70,8 @@ export const DEFAULT_CONFIG = Object.freeze({
     model: 'gpt-4o-mini',
     apiKey: '',
     timeoutMs: 30000,
-    /** 送给视觉模型的提示词；要求输出 JSON */
-    prompt:
-      '你是「老弟」，小时候家里看着用户玩电脑的弟弟，陪玩、找攻略、帮忙记事。根据这张游戏截图判断场景，并输出 JSON：' +
-      '{"scene":"street|dialog|battle|menu|shop|unknown",' +
-      '"summary":"一句话画面描述",' +
-      '"suggestion":"给玩家的一句建议，不超过 40 字",' +
-      '"spoilerLevel":0|1|2|3}。没有依据时不要编造。',
+    /** 送给视觉模型的提示词；要求输出 JSON（默认套用「老弟」人格） */
+    prompt: buildVisionPrompt('laodi'),
     /** 强制 mock（无 API Key 时自动启用） */
     mock: false,
   }),

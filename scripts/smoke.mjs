@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { loadConfig, DEFAULT_CONFIG, resolveDataDir } from '../src/config.mjs';
@@ -334,6 +335,85 @@ await test('主循环 start/stop 可控', async () => {
   await host.stop();
   await running;
   assert.equal(host.state.running, false);
+});
+
+console.log('persona presets:');
+
+await test('默认人格预设是「老弟」', async () => {
+  const {
+    DEFAULT_PERSONA_ID,
+    listPersonaPresets,
+    getPersonaPreset,
+    applyPersonaPreset,
+  } = await import('../src/host/persona.mjs');
+  assert.equal(DEFAULT_PERSONA_ID, 'laodi');
+  const presets = listPersonaPresets();
+  assert.ok(presets.some((item) => item.id === 'laodi' && item.isDefault));
+  const laodi = getPersonaPreset('laodi');
+  assert.equal(laodi.name, '老弟');
+  assert.ok(laodi.soul.includes('老弟'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-persona-'));
+  const applied = applyPersonaPreset(tmp, 'laodi');
+  assert.equal(applied.preset.id, 'laodi');
+  assert.ok(fs.readFileSync(path.join(tmp, 'persona', 'SOUL.md'), 'utf8').includes('老弟'));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(tmp, 'persona', 'active.json'), 'utf8')).presetId,
+    'laodi',
+  );
+});
+
+console.log('companion workspace:');
+
+await test('ensureCompanionWorkspace 会登记到 storages/workspace.json', async () => {
+  const { ensureCompanionWorkspace, describeCompanionWorkspace, listWorkspaces } =
+    await import('../src/host/workspace.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-ws-'));
+  const wsDir = path.join(tmpHome, 'companion-ws');
+  const env = { DSH_HOME: tmpHome };
+  const first = ensureCompanionWorkspace({
+    env,
+    workspacePath: wsDir,
+    workspaceTitle: '陪玩',
+    setAsDefault: true,
+    personaPresetId: 'laodi',
+    personaPluginId: 'dsh-companion',
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.created, true);
+  assert.ok(first.workspace.id);
+  assert.equal(first.workspace.title, '陪玩');
+  assert.equal(first.workspace.isDefault, true);
+  assert.equal(first.persona?.id, 'laodi');
+  assert.ok(fs.existsSync(path.join(wsDir, '.dsh-laodi-workspace.json')));
+  assert.ok(fs.existsSync(path.join(wsDir, 'persona', 'SOUL.md')));
+  assert.ok(fs.readFileSync(path.join(wsDir, 'persona', 'SOUL.md'), 'utf8').includes('老弟'));
+  assert.ok(!fs.readFileSync(path.join(wsDir, 'README.md'), 'utf8').includes('P5R'));
+
+  const listed = listWorkspaces(env);
+  assert.equal(listed.items.length, 1);
+  assert.equal(listed.items[0].id, first.workspace.id);
+
+  const second = ensureCompanionWorkspace({
+    env,
+    workspacePath: wsDir,
+    workspaceTitle: '陪玩',
+    workspaceId: first.workspace.id,
+  });
+  assert.equal(second.created, false);
+  assert.equal(second.workspace.id, first.workspace.id);
+
+  const desc = describeCompanionWorkspace(
+    {
+      workspaceId: first.workspace.id,
+      workspacePath: wsDir,
+      workspaceTitle: '陪玩',
+      personaPluginId: 'dsh-companion',
+    },
+    env,
+  );
+  assert.equal(desc.registered, true);
+  assert.equal(desc.directoryExists, true);
+  assert.equal(desc.markerExists, true);
 });
 
 console.log('repo hygiene:');

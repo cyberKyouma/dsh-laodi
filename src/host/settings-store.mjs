@@ -21,6 +21,17 @@ export const DEFAULT_SETTINGS = Object.freeze({
   visionProviderId: '',
   /** 视觉密钥取自哪个环境变量名（留空 = 用 provider 自己的 apiKeyEnv） */
   visionApiKeyEnv: '',
+  /** 专用陪玩工作区（DSH 侧边栏「工作区」） */
+  workspacePath: '',
+  workspaceTitle: '陪玩',
+  workspaceId: '',
+  setWorkspaceDefault: false,
+  /** 内置人格预设 id；默认「老弟」 */
+  personaPresetId: 'laodi',
+  /** 预留：对接已有人设插件包名（如 dsh-companion / dsh-assist） */
+  personaPluginId: '',
+  /** 预留：对接桌宠插件包名 */
+  petPluginId: '',
 });
 
 export function settingsFile(env = process.env) {
@@ -76,6 +87,13 @@ export function normalizeSettings(raw = {}) {
     calibrateDate: str(source.calibrateDate),
     visionProviderId: str(source.visionProviderId),
     visionApiKeyEnv: str(source.visionApiKeyEnv),
+    workspacePath: str(source.workspacePath),
+    workspaceTitle: str(source.workspaceTitle) || DEFAULT_SETTINGS.workspaceTitle,
+    workspaceId: str(source.workspaceId),
+    setWorkspaceDefault: Boolean(source.setWorkspaceDefault),
+    personaPresetId: str(source.personaPresetId) || DEFAULT_SETTINGS.personaPresetId,
+    personaPluginId: str(source.personaPluginId),
+    petPluginId: str(source.petPluginId),
   };
 }
 

@@ -9,6 +9,7 @@
 ## 文档
 - [docs/SPEC.md](docs/SPEC.md) — MVP 规格
 - [docs/PLAN.md](docs/PLAN.md) — 开发计划与批次
+- [docs/SESSION.md](docs/SESSION.md) — **多轮 Session / 聊天记忆（现行开发依据，可改）**
 - [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — 验收用例
 - [docs/TASK_BATCH1.md](docs/TASK_BATCH1.md) — Batch 1 任务书
 

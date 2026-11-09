@@ -19,3 +19,5 @@
         personaPresetId: 'laodi'
         personaPluginId: ''
         petPluginId: ''
+        companionSessionId: ''
+        sessionAttachImages: false

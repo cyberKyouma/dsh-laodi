@@ -6,6 +6,10 @@
  *   POST /config         保存设置；body.dshProviderEdit 可新增/编辑 DSH provider
  *   GET  /workspace      专用工作区状态
  *   POST /workspace/ensure  创建目录并登记到 DSH 工作区列表
+ *   GET  /session        陪玩 Session 状态
+ *   POST /session/ensure 确保 create/resume
+ *   POST /session/reset  重置并新建 Session
+ *   POST /ask            提问（优先 Session followup）
  *   POST /once           立刻跑一轮
  *   GET  /probe          只探一屏
  *   POST /vision/test    测一下视觉
@@ -41,8 +45,13 @@ import {
   personaVisionHint,
   resolvePersonaPresetId,
 } from './host/persona.mjs';
+import {
+  createCompanionSessionManager,
+  getAgents,
+} from './host/session.mjs';
 
 export const name = 'dsh-laodi';
+/** agents 软取，不硬 inject，避免加载顺序把插件卡死 */
 export const inject = ['webServer'];
 
 export const ROUTE_PREFIX = '/dsh-laodi-9101';
@@ -189,7 +198,7 @@ function describeDsh(env = process.env) {
  * 宿主
  * ------------------------------------------------------------------ */
 
-function buildHostParts(live, logger) {
+function buildHostParts(live, logger, session = null) {
   const target = resolveVisionTarget({
     providerId: live.visionProviderId,
     model: live.visionModel,
@@ -223,6 +232,7 @@ function buildHostParts(live, logger) {
   const host = createHost({
     config: hostConfig,
     vision,
+    session,
     logger: {
       info: (...args) => (logger.info ? logger.info(...args) : console.log(...args)),
       warn: (...args) => (logger.warn ? logger.warn(...args) : console.warn(...args)),
@@ -230,7 +240,7 @@ function buildHostParts(live, logger) {
       log: (...args) => console.log(...args),
     },
   });
-  return { host, hostConfig, vision, target };
+  return { host, hostConfig, vision, target, session };
 }
 
 export function apply(ctx, config = {}) {
@@ -238,7 +248,19 @@ export function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
   const user = readUserSettings();
   let live = mergeLiveSettings(config, user.settings);
-  let parts = buildHostParts(live, logger);
+
+  const sessionManager = createCompanionSessionManager({
+    getAgents: () => getAgents(ctx),
+    getSettings: () => live,
+    persistSettings: (patch) => {
+      const written = writeUserSettings(patch);
+      live = mergeLiveSettings(config, written.settings);
+      return live;
+    },
+    trace: (line) => trace(line),
+  });
+
+  let parts = buildHostParts(live, logger, sessionManager);
 
   const restartHost = (nextLive) => {
     try {
@@ -247,7 +269,7 @@ export function apply(ctx, config = {}) {
       // ignore
     }
     live = nextLive;
-    parts = buildHostParts(live, logger);
+    parts = buildHostParts(live, logger, sessionManager);
     if (live.enabled) {
       parts.host.start();
       if (live.calibrateDate) {
@@ -285,6 +307,11 @@ export function apply(ctx, config = {}) {
           trace('host stopped');
         } catch (err) {
           trace(`host stop error: ${err?.message || err}`);
+        }
+        try {
+          void sessionManager.dispose?.();
+        } catch {
+          // ignore
         }
       },
       'dsh-laodi: host loop',
@@ -364,6 +391,7 @@ export function apply(ctx, config = {}) {
                 }
               : null;
           })(),
+          session: sessionManager.describe(),
           runtime: {
             enabled: live.enabled,
             visionModel: parts.hostConfig.vision.model,
@@ -374,6 +402,83 @@ export function apply(ctx, config = {}) {
         },
         { 'cache-control': 'no-store' },
       );
+      return;
+    }
+
+    if (method === 'GET' && route === '/session') {
+      sendJson(
+        res,
+        200,
+        { ok: true, session: sessionManager.describe() },
+        { 'cache-control': 'no-store' },
+      );
+      return;
+    }
+
+    if (method === 'POST' && route === '/session/ensure') {
+      try {
+        const ensured = await sessionManager.ensure();
+        sendJson(res, 200, {
+          ok: Boolean(ensured.ok),
+          ...ensured,
+          session: sessionManager.describe(),
+          config: publicSettings(live),
+        });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          reason: 'session-ensure-failed',
+          message: error instanceof Error ? error.message : String(error),
+          session: sessionManager.describe(),
+        });
+      }
+      return;
+    }
+
+    if (method === 'POST' && route === '/session/reset') {
+      try {
+        const reset = await sessionManager.reset();
+        sendJson(res, 200, {
+          ok: Boolean(reset.ok),
+          ...reset,
+          session: sessionManager.describe(),
+          config: publicSettings(live),
+        });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          reason: 'session-reset-failed',
+          message: error instanceof Error ? error.message : String(error),
+          session: sessionManager.describe(),
+        });
+      }
+      return;
+    }
+
+    if (method === 'POST' && route === '/ask') {
+      const body = (await readJson(req)) ?? {};
+      const question = String(body.question ?? body.q ?? '').trim();
+      if (!question) {
+        sendJson(res, 400, { ok: false, reason: 'empty-question', message: '缺少 question' });
+        return;
+      }
+      try {
+        const result = await parts.host.ask(question, {
+          forceAskOnce: Boolean(body.forceAskOnce || body.askOnce),
+        });
+        sendJson(res, 200, {
+          ok: Boolean(result?.ok),
+          result,
+          session: sessionManager.describe(),
+        });
+      } catch (error) {
+        sendJson(res, 200, {
+          ok: false,
+          reason: 'ask-failed',
+          message: error instanceof Error ? error.message : String(error),
+          session: sessionManager.describe(),
+        });
+      }
       return;
     }
 
@@ -535,6 +640,7 @@ export function apply(ctx, config = {}) {
             }
           : null,
         workspace: describeCompanionWorkspace(live),
+        session: sessionManager.describe(),
         runtime: {
           enabled: live.enabled,
           visionModel: parts.hostConfig.vision.model,

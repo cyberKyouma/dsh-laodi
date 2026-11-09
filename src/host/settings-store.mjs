@@ -32,6 +32,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   personaPluginId: '',
   /** 预留：对接桌宠插件包名 */
   petPluginId: '',
+  /** 固定陪玩 DSH Session id（空 = 尚未创建） */
+  companionSessionId: '',
+  /** 截图是否以附件进 Session；默认 false，只 inject 文字摘要 */
+  sessionAttachImages: false,
 });
 
 export function settingsFile(env = process.env) {
@@ -94,6 +98,8 @@ export function normalizeSettings(raw = {}) {
     personaPresetId: str(source.personaPresetId) || DEFAULT_SETTINGS.personaPresetId,
     personaPluginId: str(source.personaPluginId),
     petPluginId: str(source.petPluginId),
+    companionSessionId: str(source.companionSessionId),
+    sessionAttachImages: Boolean(source.sessionAttachImages),
   };
 }
 

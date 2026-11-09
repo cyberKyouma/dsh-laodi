@@ -13,6 +13,7 @@
  *   node src/index.mjs
  *   node src/index.mjs --mock --once
  *   node src/index.mjs --mock --calibrate=04/17 --ask=Persona
+ *   node src/index.mjs --mock --ask-once=Persona
  *   node src/index.mjs --probe
  */
 
@@ -28,7 +29,7 @@ import { createOverlayController } from './overlay/overlay.mjs';
 import { loadKnowledgePack } from './data/knowledge.mjs';
 import { createReminderStore } from './reminders/store.mjs';
 import { createFavoritesStore } from './favorites/store.mjs';
-import { askOnce } from './ask/ask.mjs';
+import { askCompanion, askOnce } from './ask/ask.mjs';
 import {
   SCENE,
   DEFAULT_ALLOWED_SCENE_KEYWORDS,
@@ -58,6 +59,8 @@ export function createHost(options = {}) {
     dataDir = resolveDataDir(),
     reminders = null,
     favorites = null,
+    /** createCompanionSessionManager() 返回值；CLI 无 agents 时可空 */
+    session = null,
   } = options;
 
   const state = {
@@ -328,26 +331,27 @@ export function createHost(options = {}) {
     return state.calibration;
   }
 
-  async function ask(question) {
-    const result = await askOnce(
-      {
-        capture,
-        probe,
-        vision,
-        knowledge: getPack(),
-        config,
-        state,
-        overlay,
-        favorites: favoritesStore,
-        bufferToBase64,
-      },
-      question,
-    );
+  async function ask(question, askOptions = {}) {
+    const askCtx = {
+      capture,
+      probe,
+      vision,
+      knowledge: getPack(),
+      config,
+      state,
+      overlay,
+      favorites: favoritesStore,
+      bufferToBase64,
+      session,
+    };
+    const result = askOptions.forceAskOnce
+      ? await askOnce(askCtx, question)
+      : await askCompanion(askCtx, question, askOptions);
     state.lastAsk = result;
     pushOverlayLists();
     logger.info?.(
       result.ok
-        ? `[host] 问答：${result.answer?.bubble}`
+        ? `[host] 问答(${result.mode || 'askOnce'})：${result.answer?.bubble}`
         : `[host] 问答失败：${result.reason}`,
     );
     return result;
@@ -360,6 +364,7 @@ export function createHost(options = {}) {
     overlay,
     reminders: reminderStore,
     favorites: favoritesStore,
+    session,
     tick,
     start,
     stop,
@@ -384,6 +389,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     intervalSec: null,
     calibrate: null,
     ask: null,
+    askOnce: null,
     listFavorites: false,
   };
   for (const arg of argv) {
@@ -396,6 +402,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
       flags.intervalSec = Number(arg.slice('--interval='.length));
     } else if (arg.startsWith('--calibrate=')) {
       flags.calibrate = arg.slice('--calibrate='.length);
+    } else if (arg.startsWith('--ask-once=')) {
+      flags.askOnce = arg.slice('--ask-once='.length);
     } else if (arg.startsWith('--ask=')) {
       flags.ask = arg.slice('--ask='.length);
     }
@@ -436,7 +444,15 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(JSON.stringify({ calibration: cal, reminders: host.reminders.list() }, null, 2));
   }
 
+  if (flags.askOnce) {
+    const result = await host.ask(flags.askOnce, { forceAskOnce: true });
+    console.log(JSON.stringify(result, null, 2));
+    await host.stop();
+    return result.ok ? 0 : 1;
+  }
+
   if (flags.ask) {
+    // CLI 无 Cordis agents 时 askCompanion 会自动降级 askOnce
     const result = await host.ask(flags.ask);
     console.log(JSON.stringify(result, null, 2));
     await host.stop();

@@ -1,9 +1,13 @@
 /**
- * 问答：热键/CLI 触发 → 强制识一屏 → 知识包名词优先 → 视觉兜底。
+ * 问答：热键/CLI 触发 → 强制识一屏 → 知识包名词优先 → Session followup（有 agents 时）/ askOnce 降级。
  * MVP 不做 ASR；打字输入即可。热键由宿主注册（可缺省）。
  */
 
 import { filterBySpoiler, buildBubble } from '../policy/speak.mjs';
+import {
+  buildGlossaryInjectText,
+  buildScreenInjectText,
+} from '../host/session.mjs';
 
 function normalizeTerm(value) {
   return String(value ?? '')
@@ -44,7 +48,18 @@ export function composeAnswer(options = {}) {
     glossaryHit = null,
     vision = null,
     maxChars = 40,
+    sessionReply = '',
   } = options;
+
+  const fromSession = String(sessionReply ?? '').trim();
+  if (fromSession) {
+    return {
+      source: 'session',
+      full: fromSession,
+      bubble: buildBubble(fromSession, maxChars),
+      id: null,
+    };
+  }
 
   if (glossaryHit) {
     const brief = String(glossaryHit.brief ?? glossaryHit.detail ?? '').trim();
@@ -72,25 +87,8 @@ export function composeAnswer(options = {}) {
   };
 }
 
-/**
- * 执行一次问答（强制识屏）。
- */
-export async function askOnce(ctx = {}, question = '') {
-  const q = String(question ?? '').trim();
-  if (!q) return { ok: false, reason: 'empty-question' };
-
-  const {
-    capture,
-    probe,
-    vision,
-    knowledge,
-    config = {},
-    state = {},
-    overlay,
-    favorites,
-    bufferToBase64,
-  } = ctx;
-
+async function captureVision(ctx = {}) {
+  const { capture, probe, vision, bufferToBase64 } = ctx;
   let visionResult = null;
   let captureOk = false;
   try {
@@ -120,6 +118,49 @@ export async function askOnce(ctx = {}, question = '') {
       error: err instanceof Error ? err.message : String(err),
     };
   }
+  return { visionResult, captureOk };
+}
+
+function finishAsk(ctx, payload) {
+  const { overlay, favorites, state = {}, config = {} } = ctx;
+  const { question, answer, visionResult, captureOk, mode, session = null, sessionError = '' } =
+    payload;
+
+  overlay?.speak?.(answer.bubble, { at: Date.now() / 1000, source: 'ask' });
+
+  let favorite = null;
+  if (favorites && answer.full) {
+    favorite = favorites.add({
+      text: answer.full,
+      question,
+      source: answer.source,
+      gameDate: state.calibration?.gameDate ?? '',
+    });
+  }
+
+  return {
+    ok: true,
+    question,
+    answer,
+    vision: visionResult,
+    captureOk,
+    favorite,
+    mode: mode || 'askOnce',
+    session,
+    sessionError: sessionError || '',
+    bubbleMaxChars: config.bubbleMaxChars ?? 40,
+  };
+}
+
+/**
+ * 执行一次问答（强制识屏）。无 Session，孤立 askOnce。
+ */
+export async function askOnce(ctx = {}, question = '') {
+  const q = String(question ?? '').trim();
+  if (!q) return { ok: false, reason: 'empty-question' };
+
+  const { knowledge, config = {}, state = {} } = ctx;
+  const { visionResult, captureOk } = await captureVision(ctx);
 
   const pack = knowledge ?? { glossary: [] };
   const hit = lookupGlossary(
@@ -134,26 +175,102 @@ export async function askOnce(ctx = {}, question = '') {
     maxChars: config.bubbleMaxChars ?? 40,
   });
 
-  overlay?.speak?.(answer.bubble, { at: Date.now() / 1000, source: 'ask' });
+  return finishAsk(ctx, {
+    question: q,
+    answer,
+    visionResult,
+    captureOk,
+    mode: 'askOnce',
+  });
+}
 
-  let favorite = null;
-  if (favorites && answer.full) {
-    favorite = favorites.add({
-      text: answer.full,
+/**
+ * 陪玩提问：强制识屏 → glossary → 尽量走 DSH Session followup；失败则 askOnce。
+ *
+ * @param {object} ctx
+ * @param {string} question
+ * @param {{ forceAskOnce?: boolean }} [options]
+ */
+export async function askCompanion(ctx = {}, question = '', options = {}) {
+  const q = String(question ?? '').trim();
+  if (!q) return { ok: false, reason: 'empty-question' };
+
+  if (options.forceAskOnce || !ctx.session) {
+    const once = await askOnce(ctx, q);
+    if (once.ok) once.mode = options.forceAskOnce ? 'askOnce-forced' : 'askOnce';
+    return once;
+  }
+
+  const { knowledge, config = {}, state = {}, session } = ctx;
+  const { visionResult, captureOk } = await captureVision(ctx);
+
+  const pack = knowledge ?? { glossary: [] };
+  const hit = lookupGlossary(
+    q,
+    pack.glossary ?? [],
+    config.policy?.spoilerDefault ?? 'light',
+  );
+
+  const screenText = buildScreenInjectText({
+    vision: visionResult,
+    gameDate: state.calibration?.gameDate ?? '',
+    timeSlot: state.calibration?.timeSlot ?? '',
+    captureOk,
+  });
+  const glossaryText = buildGlossaryInjectText(hit);
+
+  let sessionResult = null;
+  try {
+    sessionResult = await session.followupAsk(q, {
+      screenText,
+      glossaryText,
+    });
+  } catch (error) {
+    sessionResult = {
+      ok: false,
+      reason: 'followup-threw',
+      mode: 'askOnce',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (sessionResult?.ok && sessionResult.mode === 'session') {
+    const answer = composeAnswer({
       question: q,
-      source: answer.source,
-      gameDate: state.calibration?.gameDate ?? '',
+      glossaryHit: hit,
+      vision: visionResult,
+      sessionReply: sessionResult.reply,
+      maxChars: config.bubbleMaxChars ?? 40,
+    });
+    // Session 没抠到助手原文时，用 glossary/vision 本地组装气泡，但 mode 仍标 session
+    return finishAsk(ctx, {
+      question: q,
+      answer,
+      visionResult,
+      captureOk,
+      mode: 'session',
+      session: sessionResult.session || session.describe?.() || null,
     });
   }
 
-  return {
-    ok: true,
+  const answer = composeAnswer({
+    question: q,
+    glossaryHit: hit,
+    vision: visionResult,
+    maxChars: config.bubbleMaxChars ?? 40,
+  });
+  return finishAsk(ctx, {
     question: q,
     answer,
-    vision: visionResult,
+    visionResult,
     captureOk,
-    favorite,
-  };
+    mode: 'askOnce',
+    session: sessionResult?.session || session.describe?.() || null,
+    sessionError:
+      sessionResult?.message ||
+      sessionResult?.reason ||
+      'session-unavailable',
+  });
 }
 
-export default { askOnce, lookupGlossary, composeAnswer };
+export default { askOnce, askCompanion, lookupGlossary, composeAnswer };

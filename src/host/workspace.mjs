@@ -273,6 +273,45 @@ export function ensureCompanionWorkspace(options = {}) {
   };
 }
 
+/**
+ * 把 Session id 挂到「陪玩」工作区的 sessionIds，侧边栏才能看见。
+ * @param {{ workspaceId: string, sessionId: string, env?: NodeJS.ProcessEnv }} options
+ */
+export function attachSessionToWorkspace(options = {}) {
+  const env = options.env ?? process.env;
+  const workspaceId = String(options.workspaceId || '').trim();
+  const sessionId = String(options.sessionId || '').trim();
+  if (!workspaceId || !sessionId) {
+    return { ok: false, reason: 'workspace-or-session-missing' };
+  }
+  const { file, store } = readWorkspaceStore(env);
+  const row = store.tables.workspaces[workspaceId];
+  if (!row || typeof row !== 'object') {
+    return { ok: false, reason: 'workspace-missing', file };
+  }
+  const ids = Array.isArray(row.sessionIds) ? [...row.sessionIds] : [];
+  let added = false;
+  if (!ids.includes(sessionId)) {
+    ids.push(sessionId);
+    added = true;
+  }
+  const now = new Date().toISOString();
+  store.tables.workspaces[workspaceId] = {
+    ...row,
+    sessionIds: ids,
+    updatedAt: now,
+  };
+  writeWorkspaceStoreAtomic(file, store);
+  return {
+    ok: true,
+    added,
+    file,
+    workspaceId,
+    sessionId,
+    sessionCount: ids.length,
+  };
+}
+
 /** 只读状态：设置是否指向一个已存在的登记 */
 export function describeCompanionWorkspace(settings = {}, env = process.env) {
   const listed = listWorkspaces(env);
@@ -315,5 +354,6 @@ export default {
   listWorkspaces,
   seedWorkspaceFiles,
   ensureCompanionWorkspace,
+  attachSessionToWorkspace,
   describeCompanionWorkspace,
 };

@@ -30,3 +30,10 @@
 ## Batch 5 — 打磨与验收全用例
 - [x] 对照 docs/ACCEPTANCE.md 逻辑用例（冒烟）
 - [ ] 真机 P5R 窗口化联调
+
+## Batch 6 — 多轮 DSH Session + 聊天记忆
+- 详见 **[SESSION.md](./SESSION.md)**（缺口、批次 Session-0～3、已拍板表；后续以该文件为准迭代）
+- [x] Session-0 探测与设计冻结
+- [x] Session-1 固定 Session + 文字多轮
+- [~] Session-2 识屏 inject + 基础工具（inject 已通；agent 工具注册待补）
+- [ ] Session-3 长期记忆与打磨

@@ -98,9 +98,6 @@ window.__ModuleLoader__.load({
       const saveStateHook = useState(null);
       const saveState = saveStateHook[0];
       const setSaveState = saveStateHook[1];
-      const keyState = useState('');
-      const keyDraft = keyState[0];
-      const setKeyDraft = keyState[1];
       const saveTimer = useRef(null);
 
       const load = async function () {
@@ -256,6 +253,63 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const ensureSession = async function () {
+        setBusy('session');
+        setOutput('正在确保陪玩 Session…');
+        try {
+          const response = await fetch(ROUTE + '/session/ensure', { method: 'POST' });
+          const payload = await response.json();
+          if (payload && payload.session) {
+            setMeta(function (previous) {
+              return Object.assign({}, previous || {}, { session: payload.session });
+            });
+          }
+          if (payload && payload.config) setConfig(payload.config);
+          setOutput(JSON.stringify(payload, null, 2));
+          if (!payload || !payload.ok) {
+            setError((payload && (payload.message || payload.reason)) || 'ensure session failed');
+          } else {
+            setError(null);
+          }
+          void load();
+        } catch (cause) {
+          const text = String((cause && cause.message) || cause);
+          setError(text);
+          setOutput('Session 失败：' + text);
+        } finally {
+          setBusy(null);
+        }
+      };
+
+      const resetSession = async function () {
+        if (!window.confirm('重置后会新建一条陪玩 Session，旧对话不再被自动续上。确定？')) return;
+        setBusy('session-reset');
+        setOutput('正在重置 Session…');
+        try {
+          const response = await fetch(ROUTE + '/session/reset', { method: 'POST' });
+          const payload = await response.json();
+          if (payload && payload.session) {
+            setMeta(function (previous) {
+              return Object.assign({}, previous || {}, { session: payload.session });
+            });
+          }
+          if (payload && payload.config) setConfig(payload.config);
+          setOutput(JSON.stringify(payload, null, 2));
+          if (!payload || !payload.ok) {
+            setError((payload && (payload.message || payload.reason)) || 'reset session failed');
+          } else {
+            setError(null);
+          }
+          void load();
+        } catch (cause) {
+          const text = String((cause && cause.message) || cause);
+          setError(text);
+          setOutput('重置失败：' + text);
+        } finally {
+          setBusy(null);
+        }
+      };
+
       const runOnce = async function () {
         setBusy('once');
         setOutput('running...');
@@ -281,7 +335,7 @@ window.__ModuleLoader__.load({
               visionBaseURL: (config && config.visionBaseURL) || '',
               visionModel: (config && config.visionModel) || '',
               visionApiKeyEnv: (config && config.visionApiKeyEnv) || '',
-              visionApiKey: keyDraft === '' ? '__KEEP__' : keyDraft,
+              visionApiKey: '__KEEP__',
             }),
           });
           const payload = await response.json();
@@ -307,6 +361,7 @@ window.__ModuleLoader__.load({
       const dsh = (meta && meta.dsh) || {};
       const workspaceMeta = (meta && meta.workspace) || {};
       const workspaceRow = workspaceMeta.workspace || null;
+      const sessionMeta = (meta && meta.session) || {};
       const personas = (meta && meta.personas) || [];
       const activePersona = (meta && meta.persona) || null;
 
@@ -421,6 +476,45 @@ window.__ModuleLoader__.load({
           ),
         ),
         h('div', { className: NS + '-card' },
+          h('h3', { className: NS + '-card__title' }, '多轮 Session'),
+          h('div', { className: NS + '-hint' },
+            'agents：',
+            h('span', {
+              className: NS + '-pill ' + (sessionMeta.agentsAvailable ? NS + '-pill--ok' : NS + '-pill--bad'),
+            }, sessionMeta.agentsAvailable ? '可用' : '不可用→askOnce'),
+            ' 存活：',
+            h('span', {
+              className: NS + '-pill ' + (sessionMeta.live ? NS + '-pill--ok' : ''),
+            }, sessionMeta.live ? 'live' : (sessionMeta.status || 'none')),
+            sessionMeta.companionSessionId
+              ? (' · id ' + sessionMeta.companionSessionId)
+              : ' · 尚未创建',
+          ),
+          sessionMeta.lastError
+            ? h('div', { className: NS + '-hint' }, '最近错误：' + sessionMeta.lastError)
+            : null,
+          field(
+            '截图进 Session',
+            toggle('sessionAttachImages', '附件原图（默认关，只 inject 文字摘要）'),
+            '关闭时提问只注入识屏/知识包文字，符合隐私默认。',
+          ),
+          h('div', { className: NS + '-actions' },
+            h('button', {
+              className: NS + '-btn ' + NS + '-btn--primary',
+              onClick: ensureSession,
+              disabled: busy === 'session',
+            }, busy === 'session' ? '确保中…' : '确保 Session'),
+            h('button', {
+              className: NS + '-btn',
+              onClick: resetSession,
+              disabled: busy === 'session-reset',
+            }, busy === 'session-reset' ? '重置中…' : '重置 Session'),
+          ),
+          h('div', { className: NS + '-hint' },
+            '提问走 POST /ask → followup；主动开口默认不写入 Session。重启 DSH 后会按 companionSessionId resume。',
+          ),
+        ),
+        h('div', { className: NS + '-card' },
           h('h3', { className: NS + '-card__title' }, '开关与节奏'),
           field('启用', toggle('enabled', '开启陪玩主循环')),
           field('识屏间隔', number('captureIntervalSec', 60, 300), '秒。SPEC 建议 90–120。'),
@@ -479,33 +573,6 @@ window.__ModuleLoader__.load({
             'DSH provider 的密钥留在它自己的环境变量里（' +
             ((activeProvider && activeProvider.apiKeyEnv) || 'apiKeyEnv') +
             '），设置页只看得到「找没找到」，明文不回显、不进日志。',
-          ),
-        ),
-        h('div', { className: NS + '-card' },
-          h('h3', { className: NS + '-card__title' }, '手动覆盖（一般不用动）'),
-          field('强制 mock', toggle('visionMock', '不调真实模型（调试用）')),
-          field('接口地址', text('visionBaseURL', magpie.baseURL || 'http://127.0.0.1:3425/v1'), '留空 = 用 DSH provider 的 baseURL。'),
-          field('模型 ID', text('visionModel', magpie.model || 'deepseek/deepseek-flash'), '留空 = 自动选。'),
-          field('密钥环境变量', text('visionApiKeyEnv', (activeProvider && activeProvider.apiKeyEnv) || 'MAGPIE_GATEWAY_KEY'), '留空 = 用 provider 自己的 apiKeyEnv。'),
-          field('API Key',
-            h('div', { style: { display: 'flex', gap: 8 } },
-              h('input', {
-                type: 'password',
-                autoComplete: 'off',
-                value: keyDraft,
-                placeholder: config.hasVisionApiKey ? '已保存（留空=不改）' : '留空=用 provider 的密钥',
-                onChange: function (event) {
-                  const value = event.currentTarget.value;
-                  setKeyDraft(value);
-                  patch({ visionApiKey: value === '' ? '__KEEP__' : value });
-                },
-              }),
-              h('button', {
-                className: NS + '-btn',
-                onClick: function () { setKeyDraft(''); patch({ visionApiKey: '__CLEAR__' }, { immediate: true }); },
-              }, '清除'),
-            ),
-            '手填的 Key 会盖住 provider 的环境变量密钥；只存在本机 dsh-laodi.json，界面不回显。',
           ),
         ),
         h('div', { className: NS + '-actions' },

@@ -362,6 +362,161 @@ await test('默认人格预设是「老弟」', async () => {
   );
 });
 
+console.log('companion session:');
+
+await test('buildScreenInjectText / glossary inject 为纯文字', async () => {
+  const {
+    buildScreenInjectText,
+    buildGlossaryInjectText,
+  } = await import('../src/host/session.mjs');
+  const screen = buildScreenInjectText({
+    vision: { scene: 'street', summary: '涩谷', suggestion: '去花坛' },
+    gameDate: '04/17',
+    captureOk: true,
+  });
+  assert.ok(screen.includes('涩谷'));
+  assert.ok(!screen.includes('base64'));
+  const gloss = buildGlossaryInjectText({ term: 'Persona', brief: '人格面具' });
+  assert.ok(gloss.includes('Persona'));
+  assert.ok(gloss.includes('人格面具'));
+});
+
+await test('mock agents：ensure + 两轮 followup 共 Session，inject 带上识屏', async () => {
+  const { createCompanionSessionManager } = await import('../src/host/session.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-session-'));
+  const env = { DSH_HOME: tmpHome };
+  const { ensureCompanionWorkspace, attachSessionToWorkspace } = await import(
+    '../src/host/workspace.mjs'
+  );
+  const ws = ensureCompanionWorkspace({
+    env,
+    workspacePath: path.join(tmpHome, 'ws'),
+    workspaceTitle: '陪玩',
+  });
+
+  const store = { companionSessionId: '', workspaceId: ws.workspace.id };
+  const followups = [];
+  const injects = [];
+  const agentsById = new Map();
+
+  function makeAgent(id) {
+    return {
+      id,
+      status: 'idle',
+      session: { id },
+      lastAssistantText: '',
+      inject(msg) {
+        injects.push(msg);
+      },
+      followup(msg) {
+        followups.push(msg);
+        this.lastAssistantText = `回：${msg.content?.[0]?.text || ''}`;
+      },
+      whenIdle: async () => {},
+    };
+  }
+
+  const agents = {
+    get(id) {
+      return agentsById.get(id) || null;
+    },
+    async create({ sessionId }) {
+      const agent = makeAgent(sessionId);
+      agentsById.set(sessionId, agent);
+      return {
+        agent,
+        async dispose() {
+          agentsById.delete(sessionId);
+        },
+      };
+    },
+    async resume({ sessionId }) {
+      const agent = makeAgent(sessionId);
+      agentsById.set(sessionId, agent);
+      return { agent, async dispose() {} };
+    },
+  };
+
+  const prevEnv = process.env.DSH_HOME;
+  process.env.DSH_HOME = tmpHome;
+  try {
+    const session = createCompanionSessionManager({
+      getAgents: () => agents,
+      getSettings: () => store,
+      persistSettings: (patch) => {
+        Object.assign(store, patch);
+        return store;
+      },
+    });
+
+    const first = await session.ensure();
+    assert.equal(first.ok, true);
+    assert.equal(first.created, true);
+    assert.ok(store.companionSessionId);
+    const sid = store.companionSessionId;
+
+    const linked = attachSessionToWorkspace({
+      workspaceId: ws.workspace.id,
+      sessionId: sid,
+      env,
+    });
+    assert.equal(linked.ok, true);
+
+    const a1 = await session.followupAsk('第一问', {
+      screenText: '画面：街',
+      glossaryText: '词条：Persona',
+    });
+    assert.equal(a1.ok, true);
+    assert.equal(a1.mode, 'session');
+    assert.equal(a1.sessionId, sid);
+    assert.ok(injects.length >= 2);
+    assert.equal(followups.length, 1);
+
+    const a2 = await session.followupAsk('第二问还记得吗');
+    assert.equal(a2.ok, true);
+    assert.equal(a2.sessionId, sid);
+    assert.equal(followups.length, 2);
+    assert.ok(String(a2.reply || '').includes('第二问'));
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prevEnv;
+  }
+});
+
+await test('agents 不可用时 askCompanion 降级 askOnce', async () => {
+  const { askCompanion } = await import('../src/ask/ask.mjs');
+  const { createCompanionSessionManager } = await import('../src/host/session.mjs');
+  const session = createCompanionSessionManager({
+    getAgents: () => undefined,
+    getSettings: () => ({ companionSessionId: '', workspaceId: '' }),
+    persistSettings: (patch) => patch,
+  });
+  const result = await askCompanion(
+    {
+      session,
+      probe: async () => ({ title: 'Persona5Royal', processName: 'P5R.exe' }),
+      capture: async () => ({ buffer: Buffer.from('fake'), mimeType: 'image/png' }),
+      vision: {
+        describe: async () => ({
+          scene: 'street',
+          summary: '街',
+          suggestion: '走走',
+          spoilerLevel: 0,
+        }),
+      },
+      knowledge: { glossary: [{ term: 'Persona', brief: '人格面具', spoilerLevel: 0 }] },
+      config: { bubbleMaxChars: 40, policy: { spoilerDefault: 'light' } },
+      state: { calibration: { gameDate: '04/17' } },
+      bufferToBase64: (buf) => Buffer.from(buf).toString('base64'),
+    },
+    'Persona',
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'askOnce');
+  assert.ok(result.sessionError);
+  assert.equal(result.answer.source, 'glossary');
+});
+
 console.log('companion workspace:');
 
 await test('ensureCompanionWorkspace 会登记到 storages/workspace.json', async () => {

@@ -242,14 +242,17 @@ export function ensureCompanionWorkspace(options = {}) {
 
   writeWorkspaceStoreAtomic(file, store);
 
-  const seeded = seedWorkspaceFiles(wsPath, {
-    title,
-    workspaceId: id,
-    createdAt: now,
-    personaPresetId,
-    personaPluginId: options.personaPluginId || '',
-    petPluginId: options.petPluginId || '',
-  });
+  // skipSeed：只想登记 id / 目录时不要覆盖工作区里的 persona 文件
+  const seeded = options.skipSeed
+    ? { skipped: true, persona: null }
+    : seedWorkspaceFiles(wsPath, {
+        title,
+        workspaceId: id,
+        createdAt: now,
+        personaPresetId,
+        personaPluginId: options.personaPluginId || '',
+        petPluginId: options.petPluginId || '',
+      });
 
   const row = store.tables.workspaces[id];
   return {
@@ -312,8 +315,266 @@ export function attachSessionToWorkspace(options = {}) {
   };
 }
 
+/**
+ * 解析「陪玩」工作区当前该用哪个 id / 目录。
+ *
+ * 优先级：settings.workspaceId → settings.workspacePath → 默认目录。
+ * 先看 DSH 的 workspaceRegistry（在 DSH 宿主里才有），再看 workspace.json；
+ * 都没有就返回默认目录（registered=false），由调用方去登记。
+ *
+ * @param {object} settings
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {any} [registry] ctx.workspaceRegistry（可空）
+ */
+export function resolveCompanionWorkspaceState(settings = {}, env = process.env, registry = null) {
+  const wantedId = String(settings.workspaceId || '').trim();
+  const wantedPath = String(settings.workspacePath || '').trim();
+  const title = String(settings.workspaceTitle || DEFAULT_WORKSPACE_TITLE).trim() || DEFAULT_WORKSPACE_TITLE;
+
+  const fromEntity = (entity, source) => ({
+    id: String(entity?.id || wantedId),
+    path: String(entity?.path || wantedPath),
+    title: String(entity?.title || title),
+    registered: true,
+    source,
+    sessionIds: Array.isArray(entity?.sessionIds) ? [...entity.sessionIds] : [],
+  });
+
+  // 1) DSH 注册表（宿主里最准：id 与 canonical path 都是 DSH 自己认的）
+  if (registry && typeof registry.get === 'function' && wantedId) {
+    const workspace = registry.get(wantedId);
+    if (workspace) return fromEntity(workspace, 'registry');
+  }
+
+  // 2) workspace.json
+  const { store, file } = readWorkspaceStore(env);
+  if (wantedId && store.tables.workspaces[wantedId]) {
+    return { ...fromEntity(store.tables.workspaces[wantedId], 'file'), file };
+  }
+  if (wantedPath) {
+    const hit = findWorkspaceByPath(store, wantedPath);
+    if (hit) return { ...fromEntity(hit.row, 'file'), id: hit.id, file };
+  }
+
+  // 3) 注册表里按路径找（registry.list 是同步缓存读）
+  if (registry && typeof registry.list === 'function' && wantedPath) {
+    const key = normalizePathKey(wantedPath);
+    const hit = registry.list().find((item) => normalizePathKey(String(item?.path || '')) === key);
+    if (hit) return fromEntity(hit, 'registry');
+  }
+
+  // 4) 还没登记：给出打算用的目录
+  return {
+    id: '',
+    path: path.resolve(wantedPath || defaultWorkspacePath(env)),
+    title,
+    registered: false,
+    source: wantedPath ? 'settings' : 'default',
+    sessionIds: [],
+    file,
+  };
+}
+
+/**
+ * 登记工作区：宿主里有 ctx.workspaceRegistry 就走官方注册表，否则退回写 workspace.json。
+ *
+ * 官方注册表的好处：工作区 id 与 canonical path 由 DSH 自己维护，侧边栏能立刻看到，
+ * 也不会被 DSH 自己的写入覆盖掉。
+ *
+ * @param {object} options
+ * @param {any} [options.registry] ctx.workspaceRegistry（可空）
+ * @returns {Promise<object>}
+ */
+export async function ensureCompanionWorkspaceViaHost(options = {}) {
+  const env = options.env ?? process.env;
+  const registry = options.registry || null;
+  const title =
+    String(options.workspaceTitle || DEFAULT_WORKSPACE_TITLE).trim() || DEFAULT_WORKSPACE_TITLE;
+  const wsPath = path.resolve(
+    String(options.workspacePath || defaultWorkspacePath(env)).trim() || defaultWorkspacePath(env),
+  );
+  const personaPresetId = resolvePersonaPresetId(options.personaPresetId || DEFAULT_PERSONA_ID);
+  const now = new Date().toISOString();
+
+  fs.mkdirSync(wsPath, { recursive: true });
+
+  if (!registry || typeof registry.create !== 'function') {
+    const ensured = ensureCompanionWorkspace({ ...options, env, workspacePath: wsPath, workspaceTitle: title });
+    return { ...ensured, via: 'file' };
+  }
+
+  let existing = null;
+  if (typeof registry.resolveByPath === 'function') {
+    try {
+      existing = await registry.resolveByPath(wsPath);
+    } catch {
+      existing = null;
+    }
+  }
+
+  let workspace = null;
+  try {
+    workspace = await registry.create(wsPath, title);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      reason: 'workspace-registry-failed',
+      message,
+      file: workspaceStorePath(env),
+    };
+  }
+
+  const id = String(workspace?.id || '');
+  const resolvedPath = String(workspace?.path || wsPath);
+  // create() 对已存在的记录不改标题，这里显式改一次
+  if (workspace && typeof workspace.setTitle === 'function' && String(workspace.title || '') !== title) {
+    try {
+      await workspace.setTitle(title);
+    } catch {
+      // ignore：标题改不了不影响登记
+    }
+  }
+
+  const seeded = options.skipSeed
+    ? { skipped: true, persona: null }
+    : seedWorkspaceFiles(resolvedPath, {
+        title,
+        workspaceId: id,
+        createdAt: now,
+        personaPresetId,
+        personaPluginId: options.personaPluginId || '',
+        petPluginId: options.petPluginId || '',
+      });
+
+  const created = !existing;
+  return {
+    ok: true,
+    created,
+    via: 'registry',
+    file: workspaceStorePath(env),
+    workspace: {
+      id,
+      path: resolvedPath,
+      title,
+      sessionCount: Array.isArray(workspace?.sessionIds) ? workspace.sessionIds.length : 0,
+      isDefault: false,
+      createdAt: workspace?.createdAt || now,
+      updatedAt: workspace?.updatedAt || now,
+    },
+    persona: seeded.persona || null,
+    seeded,
+    hint: created
+      ? '已登记到 DSH 工作区列表。若侧边栏还没出现，切换一下工作区视图或重启 DeepSeek Harness。'
+      : '已更新现有工作区登记。相关对话请在该工作区下新建/继续。',
+  };
+}
+
+/**
+ * 把 Session 挂到工作区：宿主里有 ctx.workspaceRegistry 就走官方 attachSession，
+ * 否则退回写 workspace.json。
+ *
+ * 官方 attachSession 会校验 Session header 的 cwd 与工作区目录一致——
+ * 所以会话必须先带着正确的 cwd 建出来（见 src/host/session.mjs）。
+ *
+ * @param {{ workspaceId: string, sessionId: string, env?: NodeJS.ProcessEnv, registry?: any }} options
+ */
+export async function attachSessionToWorkspaceViaHost(options = {}) {
+  const env = options.env ?? process.env;
+  const registry = options.registry || null;
+  const workspaceId = String(options.workspaceId || '').trim();
+  const sessionId = String(options.sessionId || '').trim();
+  if (!workspaceId || !sessionId) {
+    return { ok: false, reason: 'workspace-or-session-missing' };
+  }
+
+  if (registry && typeof registry.get === 'function') {
+    const workspace = registry.get(workspaceId);
+    if (!workspace) {
+      return { ok: false, reason: 'workspace-missing', file: workspaceStorePath(env) };
+    }
+    const before = Array.isArray(workspace.sessionIds) ? workspace.sessionIds.length : 0;
+    try {
+      await workspace.attachSession(sessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        reason: 'attach-rejected',
+        message,
+        file: workspaceStorePath(env),
+        workspaceId,
+        sessionId,
+      };
+    }
+    const after = Array.isArray(workspace.sessionIds) ? workspace.sessionIds.length : 0;
+    return {
+      ok: true,
+      added: after > before,
+      via: 'registry',
+      file: workspaceStorePath(env),
+      workspaceId,
+      sessionId,
+      sessionCount: after,
+    };
+  }
+
+  const attached = attachSessionToWorkspace({ workspaceId, sessionId, env });
+  return { ...attached, via: 'file' };
+}
+
+/** 把 Session 从工作区摘掉（换会话时用，免得侧边栏留着废会话）。 */
+export async function detachSessionFromWorkspaceViaHost(options = {}) {
+  const env = options.env ?? process.env;
+  const registry = options.registry || null;
+  const workspaceId = String(options.workspaceId || '').trim();
+  const sessionId = String(options.sessionId || '').trim();
+  if (!workspaceId || !sessionId) {
+    return { ok: false, reason: 'workspace-or-session-missing' };
+  }
+
+  if (registry && typeof registry.get === 'function') {
+    const workspace = registry.get(workspaceId);
+    if (!workspace) {
+      return { ok: false, reason: 'workspace-missing', file: workspaceStorePath(env) };
+    }
+    try {
+      if (typeof workspace.detachSession === 'function') {
+        await workspace.detachSession(sessionId);
+      }
+      return { ok: true, via: 'registry', workspaceId, sessionId };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'detach-failed',
+        message: error instanceof Error ? error.message : String(error),
+        workspaceId,
+        sessionId,
+      };
+    }
+  }
+
+  const { file, store } = readWorkspaceStore(env);
+  const row = store.tables.workspaces[workspaceId];
+  if (!row || typeof row !== 'object') {
+    return { ok: false, reason: 'workspace-missing', file };
+  }
+  const ids = Array.isArray(row.sessionIds) ? [...row.sessionIds] : [];
+  const next = ids.filter((id) => id !== sessionId);
+  if (next.length === ids.length) {
+    return { ok: true, removed: false, via: 'file', file, workspaceId, sessionId };
+  }
+  store.tables.workspaces[workspaceId] = {
+    ...row,
+    sessionIds: next,
+    updatedAt: new Date().toISOString(),
+  };
+  writeWorkspaceStoreAtomic(file, store);
+  return { ok: true, removed: true, via: 'file', file, workspaceId, sessionId };
+}
+
 /** 只读状态：设置是否指向一个已存在的登记 */
-export function describeCompanionWorkspace(settings = {}, env = process.env) {
+export function describeCompanionWorkspace(settings = {}, env = process.env, registry = null) {
   const listed = listWorkspaces(env);
   const wantedId = String(settings.workspaceId || '').trim();
   const wantedPath = String(settings.workspacePath || '').trim() || defaultWorkspacePath(env);
@@ -324,6 +585,27 @@ export function describeCompanionWorkspace(settings = {}, env = process.env) {
   const current = byId || byPath || null;
   const dirExists = fs.existsSync(wantedPath);
   const markerPath = path.join(current?.path || wantedPath, WORKSPACE_MARKER);
+
+  // 宿主里有官方注册表时，以注册表为准（DSH 自己认的 id / canonical path / 会话账本）
+  let registryView = null;
+  if (registry && typeof registry.list === 'function') {
+    const items = registry.list().map((item) => ({
+      id: String(item?.id || ''),
+      path: String(item?.path || ''),
+      title: String(item?.title || ''),
+      sessionCount: Array.isArray(item?.sessionIds) ? item.sessionIds.length : 0,
+      isDefault: false,
+      createdAt: item?.createdAt || '',
+      updatedAt: item?.updatedAt || '',
+    }));
+    const hit =
+      (wantedId ? items.find((item) => item.id === wantedId) : null) ||
+      items.find((item) => normalizePathKey(item.path) === normalizePathKey(wantedPath)) ||
+      null;
+    registryView = { items, current: hit };
+  }
+
+  const resolved = registryView?.current || current;
   return {
     defaultPath: defaultWorkspacePath(env),
     storeFile: listed.file,
@@ -336,11 +618,12 @@ export function describeCompanionWorkspace(settings = {}, env = process.env) {
       personaPluginId: String(settings.personaPluginId || ''),
       petPluginId: String(settings.petPluginId || ''),
     },
-    registered: Boolean(current),
+    registered: Boolean(resolved),
     directoryExists: dirExists,
     markerExists: fs.existsSync(markerPath),
-    workspace: current,
-    all: listed.items,
+    workspace: resolved,
+    all: registryView?.items || listed.items,
+    via: registryView ? 'registry' : 'file',
   };
 }
 
@@ -354,6 +637,10 @@ export default {
   listWorkspaces,
   seedWorkspaceFiles,
   ensureCompanionWorkspace,
+  ensureCompanionWorkspaceViaHost,
   attachSessionToWorkspace,
+  attachSessionToWorkspaceViaHost,
+  detachSessionFromWorkspaceViaHost,
+  resolveCompanionWorkspaceState,
   describeCompanionWorkspace,
 };

@@ -88,6 +88,16 @@ node --env-file=.env src/index.mjs
 
 默认人格预设是 **「老弟」**（`data/personas/laodi/`），可在设置里切换；写入工作区 `persona/SOUL.md`。人设插件（`personaPluginId`）与桌宠插件（`petPluginId`）字段仍预留，后续再对接。
 
+### 陪玩会话落在哪
+
+陪玩会话建出来时会带上工作区目录当 cwd（`ctx.agents.create({ meta: { cwd } })`）：
+
+- 会话存到 `~/.dsh/sessions/<工作区目录>/`，侧边栏「陪玩」工作区里能直接看到；
+- 没有 cwd 的老会话会落在 `~/.dsh/sessions/_no-cwd/`，DSH 不认它属于哪个工作区——插件检测到就会另建一条；
+- 设置页的「多轮 Session」卡片会显示当前会话的落盘目录（cwd）与是否已挂到工作区。
+
+DSH 宿主在时，工作区登记与挂载优先走官方 `ctx.workspaceRegistry`；拿不到（比如 CLI 单独跑）才退回写 `~/.dsh/storages/workspace.json`。
+
 ## 装进 DSH（desktop）
 
 本机已支持作为 Cordis bundle 安装：

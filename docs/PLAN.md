@@ -35,5 +35,6 @@
 - 详见 **[SESSION.md](./SESSION.md)**（缺口、批次 Session-0～3、已拍板表；后续以该文件为准迭代）
 - [x] Session-0 探测与设计冻结
 - [x] Session-1 固定 Session + 文字多轮
+- [x] Session-1.5 会话落到工作区目录（create 带 cwd / resumeSessionId / 官方注册表挂载 / 固定标题）
 - [~] Session-2 识屏 inject + 基础工具（inject 已通；agent 工具注册待补）
 - [ ] Session-3 长期记忆与打磨

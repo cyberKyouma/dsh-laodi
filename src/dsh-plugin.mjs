@@ -37,7 +37,7 @@ import {
 } from './host/settings-store.mjs';
 import {
   describeCompanionWorkspace,
-  ensureCompanionWorkspace,
+  ensureCompanionWorkspaceViaHost,
 } from './host/workspace.mjs';
 import {
   getPersonaPreset,
@@ -48,6 +48,7 @@ import {
 import {
   createCompanionSessionManager,
   getAgents,
+  optionalService,
 } from './host/session.mjs';
 
 export const name = 'dsh-laodi';
@@ -249,6 +250,9 @@ export function apply(ctx, config = {}) {
   const user = readUserSettings();
   let live = mergeLiveSettings(config, user.settings);
 
+  // DSH 官方工作区注册表（可空）：有就走官方 API，侧边栏立刻能看到
+  const workspaceRegistry = () => optionalService(ctx, 'workspaceRegistry');
+
   const sessionManager = createCompanionSessionManager({
     getAgents: () => getAgents(ctx),
     getSettings: () => live,
@@ -257,6 +261,10 @@ export function apply(ctx, config = {}) {
       live = mergeLiveSettings(config, written.settings);
       return live;
     },
+    // 官方工作区注册表：有就用它（侧边栏立刻可见，且不会被 DSH 覆盖掉）
+    getWorkspaceRegistry: () => optionalService(ctx, 'workspaceRegistry'),
+    // 官方会话标题服务：给陪玩会话固定一个标题
+    getSessionTitle: () => optionalService(ctx, 'sessionTitle'),
     trace: (line) => trace(line),
   });
 
@@ -372,7 +380,7 @@ export function apply(ctx, config = {}) {
           dsh,
           dshProviders,
           dshModels,
-          workspace: describeCompanionWorkspace(live),
+          workspace: describeCompanionWorkspace(live, process.env, workspaceRegistry()),
           personas: listPersonaPresets().map((item) => ({
             id: item.id,
             name: item.name,
@@ -486,7 +494,7 @@ export function apply(ctx, config = {}) {
       sendJson(
         res,
         200,
-        { ok: true, workspace: describeCompanionWorkspace(live) },
+        { ok: true, workspace: describeCompanionWorkspace(live, process.env, workspaceRegistry()) },
         { 'cache-control': 'no-store' },
       );
       return;
@@ -498,7 +506,8 @@ export function apply(ctx, config = {}) {
         const personaPresetId = resolvePersonaPresetId(
           body.personaPresetId || live.personaPresetId,
         );
-        const ensured = ensureCompanionWorkspace({
+        const ensured = await ensureCompanionWorkspaceViaHost({
+          registry: workspaceRegistry(),
           workspacePath: body.workspacePath || live.workspacePath,
           workspaceTitle: body.workspaceTitle || live.workspaceTitle,
           workspaceId: body.workspaceId || live.workspaceId,
@@ -510,6 +519,15 @@ export function apply(ctx, config = {}) {
           personaPluginId: body.personaPluginId || live.personaPluginId,
           petPluginId: body.petPluginId || live.petPluginId,
         });
+        if (!ensured?.ok) {
+          sendJson(res, 200, {
+            ok: false,
+            reason: ensured?.reason || 'workspace-ensure-failed',
+            message: ensured?.message || '工作区登记失败',
+            file: ensured?.file || '',
+          });
+          return;
+        }
         const written = writeUserSettings({
           workspacePath: ensured.workspace.path,
           workspaceTitle: ensured.workspace.title,
@@ -536,7 +554,7 @@ export function apply(ctx, config = {}) {
           persona: ensured.persona,
           seeded: ensured.seeded,
           config: publicSettings(live),
-          workspace: describeCompanionWorkspace(live),
+          workspace: describeCompanionWorkspace(live, process.env, workspaceRegistry()),
         });
       } catch (error) {
         sendJson(res, 200, {
@@ -639,7 +657,7 @@ export function apply(ctx, config = {}) {
               isDefault: persona.isDefault,
             }
           : null,
-        workspace: describeCompanionWorkspace(live),
+        workspace: describeCompanionWorkspace(live, process.env, workspaceRegistry()),
         session: sessionManager.describe(),
         runtime: {
           enabled: live.enabled,

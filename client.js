@@ -486,9 +486,23 @@ window.__ModuleLoader__.load({
             h('span', {
               className: NS + '-pill ' + (sessionMeta.live ? NS + '-pill--ok' : ''),
             }, sessionMeta.live ? 'live' : (sessionMeta.status || 'none')),
+            ' 工作区：',
+            h('span', {
+              className: NS + '-pill ' + (sessionMeta.attached ? NS + '-pill--ok' : NS + '-pill--bad'),
+            }, sessionMeta.attached ? '已挂' : '未挂'),
             sessionMeta.companionSessionId
               ? (' · id ' + sessionMeta.companionSessionId)
               : ' · 尚未创建',
+          ),
+          h('div', { className: NS + '-hint' },
+            '落盘目录（cwd）：',
+            h('span', {
+              className: NS + '-pill ' + (sessionMeta.cwd ? NS + '-pill--ok' : NS + '-pill--bad'),
+            }, sessionMeta.cwd || '未设置'),
+            sessionMeta.cwd
+              ? ' · 会话存在这个目录下，侧边栏工作区才认得出来'
+              : ' · 没设 cwd 的会话会落到 ~/.dsh/sessions/_no-cwd，侧边栏看不到；点「确保 Session」会按工作区目录重建' +
+                (sessionMeta.targetCwd ? '（' + sessionMeta.targetCwd + '）' : ''),
           ),
           sessionMeta.lastError
             ? h('div', { className: NS + '-hint' }, '最近错误：' + sessionMeta.lastError)

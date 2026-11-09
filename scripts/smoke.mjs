@@ -483,6 +483,193 @@ await test('mock agents：ensure + 两轮 followup 共 Session，inject 带上�
   }
 });
 
+await test('create 带 meta.cwd、resume 用 resumeSessionId、挂载走官方工作区注册表', async () => {
+  const { createCompanionSessionManager } = await import('../src/host/session.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-cwd-'));
+  const wsDir = path.join(tmpHome, 'companion-ws');
+  fs.mkdirSync(wsDir, { recursive: true });
+
+  const createCalls = [];
+  const resumeCalls = [];
+  const attached = [];
+  const detached = [];
+
+  const workspace = {
+    id: 'ws-1',
+    path: wsDir,
+    title: '陪玩',
+    sessionIds: [],
+    async attachSession(sessionId) {
+      attached.push(sessionId);
+      this.sessionIds = [...this.sessionIds, sessionId];
+    },
+    async detachSession(sessionId) {
+      detached.push(sessionId);
+      this.sessionIds = this.sessionIds.filter((id) => id !== sessionId);
+    },
+    async setTitle() {},
+  };
+  const registry = {
+    async create() {
+      return workspace;
+    },
+    async resolveByPath() {
+      return undefined;
+    },
+    get(id) {
+      return id === workspace.id ? workspace : undefined;
+    },
+    list() {
+      return [workspace];
+    },
+  };
+
+  function makeAgent(id, cwd) {
+    return {
+      id,
+      status: 'idle',
+      session: { id, header: cwd ? { cwd } : {} },
+      inject() {},
+      followup() {},
+      whenIdle: async () => {},
+    };
+  }
+
+  const agents = {
+    get() {
+      return null;
+    },
+    async create(options) {
+      createCalls.push(options);
+      return {
+        agent: makeAgent(options.sessionId, options.meta?.cwd),
+        async dispose() {},
+      };
+    },
+    async resume(options) {
+      resumeCalls.push(options);
+      // 老会话没有 cwd（落在 ~/.dsh/sessions/_no-cwd）
+      return {
+        agent: makeAgent(options.resumeSessionId || options.sessionId, ''),
+        async dispose() {},
+      };
+    },
+  };
+
+  const store = {
+    companionSessionId: '',
+    workspaceId: 'ws-1',
+    workspacePath: wsDir,
+    workspaceTitle: '陪玩',
+  };
+
+  const prevEnv = process.env.DSH_HOME;
+  process.env.DSH_HOME = tmpHome;
+  try {
+    const session = createCompanionSessionManager({
+      getAgents: () => agents,
+      getSettings: () => store,
+      persistSettings: (patch) => {
+        Object.assign(store, patch);
+        return store;
+      },
+      getWorkspaceRegistry: () => registry,
+    });
+
+    const first = await session.ensure();
+    assert.equal(first.ok, true);
+    assert.equal(first.created, true);
+    assert.equal(createCalls.length, 1);
+    assert.equal(
+      createCalls[0].meta?.cwd,
+      wsDir,
+      '建会话必须带 meta.cwd，否则会落到 ~/.dsh/sessions/_no-cwd',
+    );
+    assert.deepEqual(attached, [first.sessionId], '会话要挂到工作区');
+    assert.equal(session.describe().cwd, wsDir);
+    assert.equal(session.describe().attached, true);
+
+    // 第二轮：没有活 agent → resume（参数名是 resumeSessionId）
+    const second = await session.ensure();
+    assert.equal(second.ok, true);
+    assert.equal(resumeCalls.length, 1);
+    assert.equal(resumeCalls[0].resumeSessionId, first.sessionId);
+    assert.equal(
+      second.created,
+      true,
+      'resume 回来的会话没有 cwd，要另建一条落在工作区目录里的',
+    );
+    assert.equal(createCalls.length, 2);
+    assert.equal(createCalls[1].meta?.cwd, wsDir);
+    assert.equal(second.sessionId !== first.sessionId, true);
+    assert.deepEqual(detached, [first.sessionId], '作废的老会话要从工作区摘掉');
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prevEnv;
+  }
+});
+
+await test('工作区目录不存在时也能建出会话（cwd 目录会被创建）', async () => {
+  const { createCompanionSessionManager } = await import('../src/host/session.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-cwd2-'));
+  const wsDir = path.join(tmpHome, 'nested', 'companion-ws');
+  let createOptions = null;
+  const agents = {
+    get() {
+      return null;
+    },
+    async create(options) {
+      createOptions = options;
+      return {
+        agent: {
+          id: options.sessionId,
+          status: 'idle',
+          session: { id: options.sessionId, header: { cwd: options.meta?.cwd } },
+          inject() {},
+          followup() {},
+          whenIdle: async () => {},
+        },
+        async dispose() {},
+      };
+    },
+  };
+  const store = {
+    companionSessionId: '',
+    workspaceId: '',
+    workspacePath: wsDir,
+    workspaceTitle: '陪玩',
+  };
+  const prevEnv = process.env.DSH_HOME;
+  process.env.DSH_HOME = tmpHome;
+  try {
+    const session = createCompanionSessionManager({
+      getAgents: () => agents,
+      getSettings: () => store,
+      persistSettings: (patch) => {
+        Object.assign(store, patch);
+        return store;
+      },
+    });
+    const ensured = await session.ensure();
+    assert.equal(ensured.ok, true);
+    assert.equal(createOptions?.meta?.cwd, wsDir);
+    assert.ok(fs.existsSync(wsDir), 'cwd 目录必须存在');
+    assert.ok(store.workspaceId, '会话要挂工作区，所以工作区 id 得先登记');
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prevEnv;
+  }
+});
+
+await test('设置回传不泄露视觉密钥明文', async () => {
+  const { normalizeSettings, publicSettings } = await import('../src/host/settings-store.mjs');
+  const settings = normalizeSettings({ visionApiKey: 'sk-secret-value' });
+  const shown = publicSettings(settings);
+  assert.equal(shown.visionApiKey, '__SET__');
+  assert.equal(shown.hasVisionApiKey, true);
+  assert.ok(!JSON.stringify(shown).includes('sk-secret-value'));
+});
+
 await test('agents 不可用时 askCompanion 降级 askOnce', async () => {
   const { askCompanion } = await import('../src/ask/ask.mjs');
   const { createCompanionSessionManager } = await import('../src/host/session.mjs');

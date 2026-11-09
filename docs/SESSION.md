@@ -2,8 +2,8 @@
 
 > **用途**：后续会话 / 聊天记忆相关开发，以本文为准；可随时改勾选与优先级。  
 > **关联**：[SPEC.md](./SPEC.md)（产品规格）· [PLAN.md](./PLAN.md)（总批次）· [ACCEPTANCE.md](./ACCEPTANCE.md)  
-> **状态**：Session-0/1 已落地；Session-2 inject 已通，工具注册待补  
-> **更新**：2026-11-09
+> **状态**：Session-0/1 已落地；Session-1.5（会话落到工作区目录）已落地；Session-2 inject 已通，工具注册待补  
+> **更新**：2026-11-10  
 
 ---
 
@@ -82,6 +82,11 @@
 - [x] Session 挂到「陪玩」工作区（`attachSessionToWorkspace` → `sessionIds`）
 - [x] 设置页展示 Session 状态：id、是否存活、一键新建/重置
 - [x] 进程重启后 resume 同一条 Session（依赖 DSH 持久化 + 本插件存 id）
+- [x] 建会话带 `meta.cwd` = 工作区目录（否则落到 `~/.dsh/sessions/_no-cwd/`，侧边栏认不出）
+- [x] `agents.resume({ resumeSessionId })`：参数名对齐 DSH
+- [x] 老会话 cwd 缺失 / 与工作区不一致 → 丢弃并另建，不硬用
+- [x] 工作区登记与挂载优先走官方 `ctx.workspaceRegistry`（没有则退回写 workspace.json）
+- [x] 会话标题固定「陪玩」（`ctx.sessionTitle.rename`）
 
 ### 4.2 把 ask 改成多轮 — P0
 
@@ -172,6 +177,11 @@
 | 截图默认 | **只 inject 文字摘要**；`sessionAttachImages` 默认 false | 2026-11-09 |
 | agents 依赖 | **软取** `optionalService(ctx,'agents')`，不硬 inject | 2026-11-09 |
 | agents 不可用 | 回退 `askOnce`，结果带 `mode` / `sessionError` | 2026-11-09 |
+| 会话 cwd | **= 「陪玩」工作区目录**（`ctx.agents.create({ meta: { cwd } })`）；没 cwd 的会话会落到 `~/.dsh/sessions/_no-cwd/` | 2026-11-10 |
+| 老会话 cwd 不对 | 丢弃并另建（不硬用）：工作区成员资格要拿 header.cwd 比对 | 2026-11-10 |
+| resume 参数名 | `ctx.agents.resume({ resumeSessionId })` | 2026-11-10 |
+| 工作区登记/挂载 | 优先官方 `ctx.workspaceRegistry`；拿不到才写 `workspace.json` | 2026-11-10 |
+| 会话标题 | 固定「陪玩」（`ctx.sessionTitle.rename`，只在没有标题时设） | 2026-11-10 |
 
 ---
 
@@ -183,7 +193,7 @@
 | `src/ask/ask.mjs` | `askCompanion` + `askOnce` |
 | `src/dsh-plugin.mjs` | `/session*`、`/ask`、挂 session 到 host |
 | `src/host/settings-store.mjs` | `companionSessionId`、`sessionAttachImages` |
-| `src/host/workspace.mjs` | `attachSessionToWorkspace` |
+| `src/host/workspace.mjs` | `attachSessionToWorkspace` + `ensureCompanionWorkspaceViaHost`（官方注册表优先） |
 | `client.js` | Session 状态 UI |
 | `src/index.mjs` | CLI `--ask` / `--ask-once` |
 | `docs/ACCEPTANCE.md` | 补多轮用例（待） |
@@ -199,6 +209,10 @@
 - [x] 提问触发识屏时，inject 文字摘要（无原图默认）
 - [x] 非游戏前台时主动开口仍停；用户提问仍可答（策略不互相踩死）
 - [x] 重置 Session 后旧 id 不再被误用（设置清空 + forceNew）
+- [x] create 时带 `meta.cwd`（冒烟：断言 create 参数里有 cwd）
+- [x] 老会话（无 cwd）不硬用：resume 后发现 cwd 不对 → 另建（冒烟）
+- [x] 挂载走官方工作区注册表（冒烟：fake registry 收到 attachSession）
+- [ ] desktop 实机：会话出现在侧边栏「陪玩」工作区里（cwd 与工作区一致） — **desktop 实机**
 
 ---
 
@@ -208,3 +222,4 @@
 | --- | --- |
 | 2026-11-09 | 初稿：缺口分析 + Session-0/1/2/3 批次 |
 | 2026-11-09 | 落地 Session-0/1 + inject；拍板主动开口不入 Session、摘要 inject、agents 软取 |
+| 2026-11-10 | 落地 Session-1.5：create 带 `meta.cwd`、resume 用 `resumeSessionId`、工作区优先走 `ctx.workspaceRegistry`、会话标题固定「陪玩」；版本 0.2.7 |

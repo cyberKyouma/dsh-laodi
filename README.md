@@ -26,10 +26,10 @@ src/
     screenshot.mjs       截屏到内存（不落盘）
   vision/client.mjs      OpenAI 兼容多模态调用（可 mock）
   policy/speak.mjs       少说规则（间隔/概率/静音/冷却/剧透）
-  overlay/overlay.mjs    悬浮窗控制器（无 Electron 时降级）
+  overlay/overlay.mjs    桌宠形象 + 气泡（无 Electron 时降级）
   data/knowledge.mjs     data/p5r 知识包加载 + 校验
 data/p5r/                知识包：calendar / shop-items / glossary
-runtime/overlay/         悬浮窗页面（气泡 + 日期标定占位）
+runtime/overlay/         圆形形象、气泡、桌面闲聊输入框
 scripts/
   smoke.mjs              离线冒烟测试
   smoke-policy.mjs       策略单测

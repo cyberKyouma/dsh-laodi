@@ -13,8 +13,9 @@ export const TOOL_SCREEN_LOOK = 'screen_look';
 export const TOOL_GLOSSARY_LOOKUP = 'glossary_lookup';
 
 const SCREEN_LOOK_DESCRIPTION =
-  '强制识一屏当前画面，返回结构化摘要（scene/summary/suggestion/spoilerLevel）。' +
+  '游戏在前台时识一屏，返回结构化摘要（scene/summary/suggestion/spoilerLevel）。' +
   '需要了解玩家眼前在干什么、或宿主没注入画面时使用。' +
+  '桌面闲聊阶段宿主会拒绝识屏（reason=desktop-no-screen-look），不要反复调用。' +
   '遵守剧透档：没有依据不要编造；本工具不负责主动开口（少说策略由宿主管）。';
 
 const GLOSSARY_LOOKUP_DESCRIPTION =

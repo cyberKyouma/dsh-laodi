@@ -22,6 +22,8 @@ import { loadConfig } from './config.mjs';
 import { createVisionClient } from './vision/client.mjs';
 import { resolveVisionTarget } from './vision/magpie.mjs';
 import { createHost } from './index.mjs';
+import { loadElectronModule } from './overlay/overlay.mjs';
+import { detectDshPet } from './overlay/pet-conflict.mjs';
 import {
   normalizeProviderSpec,
   providerKeyStatus,
@@ -213,7 +215,7 @@ function describeDsh(env = process.env) {
  * 宿主
  * ------------------------------------------------------------------ */
 
-function buildHostParts(live, logger, session = null) {
+function buildHostParts(live, logger, session = null, extras = {}) {
   const target = resolveVisionTarget({
     providerId: live.visionProviderId,
     model: live.visionModel,
@@ -248,6 +250,8 @@ function buildHostParts(live, logger, session = null) {
     config: hostConfig,
     vision,
     session,
+    electron: extras.electron ?? null,
+    petConflict: extras.petConflict ?? null,
     logger: {
       info: (...args) => (logger.info ? logger.info(...args) : console.log(...args)),
       warn: (...args) => (logger.warn ? logger.warn(...args) : console.warn(...args)),
@@ -306,7 +310,31 @@ export function apply(ctx, config = {}) {
     trace: (line) => trace(line),
   });
 
-  parts = buildHostParts(live, logger, sessionManager);
+  const electron = loadElectronModule();
+  const petFor = (settings) => {
+    const found = detectDshPet({
+      ctx,
+      electron,
+      petPluginId: settings?.petPluginId,
+    });
+    if (found.notice) trace(found.notice);
+    else if (found.installedHint) trace(found.installedHint);
+    return found;
+  };
+
+  parts = buildHostParts(live, logger, sessionManager, {
+    electron,
+    petConflict: petFor(live),
+  });
+
+  const runtimeBody = () => ({
+    enabled: live.enabled,
+    visionModel: parts.hostConfig.vision.model,
+    visionBaseURL: parts.hostConfig.vision.baseURL,
+    visionProviderId: parts.target.providerId,
+    mock: parts.vision.isMock,
+    pet: parts.host.petStatus?.() || null,
+  });
 
   const restartHost = (nextLive) => {
     try {
@@ -315,7 +343,10 @@ export function apply(ctx, config = {}) {
       // ignore
     }
     live = nextLive;
-    parts = buildHostParts(live, logger, sessionManager);
+    parts = buildHostParts(live, logger, sessionManager, {
+      electron,
+      petConflict: petFor(live),
+    });
     if (live.enabled) {
       parts.host.start();
       if (live.calibrateDate) {
@@ -438,13 +469,7 @@ export function apply(ctx, config = {}) {
               : null;
           })(),
           session: sessionManager.describe(),
-          runtime: {
-            enabled: live.enabled,
-            visionModel: parts.hostConfig.vision.model,
-            visionBaseURL: parts.hostConfig.vision.baseURL,
-            visionProviderId: parts.target.providerId,
-            mock: parts.vision.isMock,
-          },
+          runtime: runtimeBody(),
         },
         { 'cache-control': 'no-store' },
       );
@@ -701,13 +726,7 @@ export function apply(ctx, config = {}) {
           : null,
         workspace: describeCompanionWorkspace(live, process.env, workspaceRegistry()),
         session: sessionManager.describe(),
-        runtime: {
-          enabled: live.enabled,
-          visionModel: parts.hostConfig.vision.model,
-          visionBaseURL: parts.hostConfig.vision.baseURL,
-          visionProviderId: parts.target.providerId,
-          mock: parts.vision.isMock,
-        },
+        runtime: runtimeBody(),
       });
       return;
     }

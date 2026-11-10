@@ -4,117 +4,158 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';"
+      content="default-src 'none'; img-src 'self' file: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';"
     />
-    <title>dsh-laodi overlay</title>
+    <title>陪玩</title>
     <style>
       :root {
         --ink: #f4f6ff;
-        --accent: #d2263f;
-        --panel: rgba(14, 16, 26, 0.82);
-        --edge: rgba(255, 255, 255, 0.14);
+        --accent: #e08a3c;
+        --panel: rgba(22, 16, 12, 0.88);
       }
       * { box-sizing: border-box; }
       html, body {
-        margin: 0; padding: 0; width: 100%; height: 100%;
-        background: transparent; color: var(--ink);
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        color: var(--ink);
         font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-        user-select: none; overflow: hidden;
+        user-select: none;
+        overflow: hidden;
       }
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--edge);
-        border-radius: 14px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-        -webkit-app-region: drag;
-        max-height: 100%;
-        overflow: auto;
-      }
-      .dragbar {
-        height: 22px;
-        border-radius: 14px 14px 0 0;
-        background: linear-gradient(90deg, var(--accent), #5b2a86);
-        opacity: 0.85;
+      #stage {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 112px;
+        grid-template-rows: minmax(0, 1fr) auto;
+        padding: 8px;
+        background: transparent;
       }
       .bubble {
-        margin: 0 10px 8px; padding: 12px 14px;
-        font-size: 15px; line-height: 1.55; letter-spacing: 0.02em;
-        white-space: pre-wrap; word-break: break-word;
-        opacity: 0; transform: translateY(6px);
-        transition: opacity 160ms ease, transform 160ms ease;
+        grid-column: 1;
+        grid-row: 1;
+        align-self: end;
+        margin: 0 8px 6px 0;
+        padding: 10px 12px;
+        max-height: 140px;
+        overflow: hidden;
+        background: var(--panel);
+        border-radius: 14px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+        font-size: 14px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+        opacity: 0;
+        transform: translateY(6px);
+        pointer-events: none;
       }
       .bubble.visible { opacity: 1; transform: translateY(0); }
       .bubble .who {
-        display: block; margin-bottom: 4px; font-size: 11px;
-        letter-spacing: 0.16em; color: #ff8fa3;
+        display: block;
+        margin-bottom: 4px;
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        color: #ffc48a;
       }
-      .calibration, .section {
-        margin: 0 10px 10px; padding: 10px 14px;
-        font-size: 12px; color: rgba(244, 246, 255, 0.78);
+      .pet {
+        grid-column: 2;
+        grid-row: 1;
+        align-self: end;
+        justify-self: end;
+        width: 104px;
+        height: 104px;
+        border-radius: 50%;
+        overflow: hidden;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+        -webkit-app-region: drag;
+        cursor: grab;
+      }
+      .pet img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        pointer-events: none;
+        -webkit-user-drag: none;
+      }
+      .composer {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
         -webkit-app-region: no-drag;
       }
-      .calibration { display: flex; align-items: center; gap: 12px; }
-      .calibration .label, .section .label {
-        color: rgba(244, 246, 255, 0.5); letter-spacing: 0.12em;
-      }
-      .calibration .value { font-variant-numeric: tabular-nums; color: var(--ink); }
-      .hint { margin-left: auto; font-size: 10px; color: rgba(244, 246, 255, 0.38); }
-      .section h3 {
-        margin: 0 0 8px; font-size: 11px; font-weight: 600;
-        letter-spacing: 0.14em; color: rgba(244, 246, 255, 0.55);
-      }
-      .item { padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.06); }
-      .item:first-of-type { border-top: none; }
-      .item .title { color: var(--ink); font-size: 13px; }
-      .item .detail {
-        margin-top: 2px; color: rgba(244,246,255,0.55);
-        font-size: 11px; line-height: 1.4;
-      }
-      .item .meta {
-        margin-top: 4px; font-size: 10px; color: rgba(244,246,255,0.35);
-      }
-      .empty { color: rgba(244,246,255,0.35); font-size: 11px; }
-      .actions { margin-top: 6px; display: flex; gap: 6px; }
-      .actions button {
+      body[data-mode="game"] .composer { display: none; }
+      .composer input {
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: rgba(22, 16, 12, 0.88);
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+        outline: none;
+        user-select: text;
         -webkit-app-region: no-drag;
-        border: 1px solid var(--edge); background: rgba(255,255,255,0.06);
-        color: var(--ink); border-radius: 8px; padding: 3px 8px;
-        font-size: 11px; cursor: pointer;
       }
-      .actions button:hover { background: rgba(210, 38, 63, 0.35); }
+      .composer button {
+        border: 0;
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: var(--accent);
+        color: #2b1608;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+      }
     </style>
   </head>
-  <body>
-    <div class="panel" id="root">
-      <div class="dragbar" id="dragbar"></div>
+  <body data-mode="desktop">
+    <div id="stage">
       <div class="bubble" id="bubble">
-        <span class="who">LAODI</span>
+        <span class="who">陪玩</span>
         <span id="bubble-text"></span>
       </div>
-      <div class="calibration" id="calibration">
-        <span class="label">日期标定</span>
-        <span class="value" id="cal-game-date">未标定</span>
-        <span class="value" id="cal-time-slot">—</span>
-        <span class="hint">CLI: --calibrate=MM/DD</span>
+      <div class="pet hit" id="pet" title="拖动">
+        <img src="pet.svg" alt="" draggable="false" />
       </div>
-      <div class="section" id="reminders-section">
-        <h3>今日提醒</h3>
-        <div id="reminders-list" class="empty">标定日期后显示</div>
-      </div>
-      <div class="section" id="favorites-section">
-        <h3>收藏攻略</h3>
-        <div id="favorites-list" class="empty">问答后自动收藏</div>
-      </div>
+      <form class="composer hit" id="composer">
+        <input id="chat" type="text" maxlength="200" placeholder="说点什么…" autocomplete="off" />
+        <button type="submit">发送</button>
+      </form>
     </div>
     <script>
       (function () {
         var bubble = document.getElementById('bubble');
         var bubbleText = document.getElementById('bubble-text');
-        var calDate = document.getElementById('cal-game-date');
-        var calSlot = document.getElementById('cal-time-slot');
-        var remindersList = document.getElementById('reminders-list');
-        var favoritesList = document.getElementById('favorites-list');
+        var composer = document.getElementById('composer');
+        var chat = document.getElementById('chat');
         var hideTimer = null;
+        var lastSeq = -1;
+        var lastIgnore = null;
+
+        function post(channel, payload) {
+          if (window.dshOverlay && typeof window.dshOverlay.send === 'function') {
+            window.dshOverlay.send(channel, payload);
+            return;
+          }
+          var queue = window.__DSH_OVERLAY_OUTBOX__ || [];
+          queue.push({ channel: channel, payload: payload });
+          window.__DSH_OVERLAY_OUTBOX__ = queue;
+        }
+
+        function setIgnore(ignore) {
+          if (lastIgnore === ignore) return;
+          lastIgnore = ignore;
+          post('dsh-laodi:hit-test', { ignore: ignore });
+        }
 
         function setBubble(payload) {
           var text = (payload && payload.text) || '';
@@ -129,108 +170,46 @@
           }, 12000);
         }
 
-        function setCalibration(payload) {
-          if (!payload) return;
-          var date = payload.gameDate || '未标定';
-          var slot = payload.timeSlot || '—';
-          if (calDate.textContent === date && calSlot.textContent === slot) return;
-          calDate.textContent = date;
-          calSlot.textContent = slot;
+        function applyMode(mode) {
+          var next = mode === 'game' ? 'game' : 'desktop';
+          if (document.body.getAttribute('data-mode') === next) return;
+          document.body.setAttribute('data-mode', next);
+          if (next === 'game') chat.blur();
         }
 
-        function statusLabel(status) {
-          if (status === 'done') return '已完成';
-          if (status === 'ignored') return '已忽略';
-          if (status === 'later') return '稍后';
-          return '待办';
-        }
+        composer.addEventListener('submit', function (event) {
+          event.preventDefault();
+          var text = String(chat.value || '').trim();
+          if (!text) return;
+          chat.value = '';
+          post('dsh-laodi:chat', { text: text });
+        });
 
-        function escapeHtml(s) {
-          return String(s).replace(/[&<>"']/g, function (c) {
-            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
-          });
-        }
-        function escapeAttr(s) {
-          return escapeHtml(s);
-        }
-
-        function setReminders(payload) {
-          var items = (payload && payload.items) || payload || [];
-          if (!Array.isArray(items) || items.length === 0) {
-            remindersList.className = 'empty';
-            remindersList.textContent = '今天没有提醒';
-            return;
-          }
-          remindersList.className = '';
-          remindersList.innerHTML = items.map(function (item) {
-            var detail = item.detail ? '<div class="detail">' + escapeHtml(item.detail) + '</div>' : '';
-            var actions = (item.status === 'open' || item.status === 'later')
-              ? '<div class="actions">' +
-                '<button data-act="later" data-id="' + escapeAttr(item.id) + '">稍后</button>' +
-                '<button data-act="ignore" data-id="' + escapeAttr(item.id) + '">忽略</button>' +
-                '<button data-act="done" data-id="' + escapeAttr(item.id) + '">已完成</button>' +
-                '</div>'
-              : '';
-            return '<div class="item">' +
-              '<div class="title">' + escapeHtml(item.title || item.id) + '</div>' +
-              detail +
-              '<div class="meta">' + statusLabel(item.status) + ' · ' + escapeHtml(item.source || '') + '</div>' +
-              actions +
-              '</div>';
-          }).join('');
-        }
-
-        function setFavorites(payload) {
-          var items = (payload && payload.items) || payload || [];
-          if (!Array.isArray(items) || items.length === 0) {
-            favoritesList.className = 'empty';
-            favoritesList.textContent = '还没有收藏';
-            return;
-          }
-          favoritesList.className = '';
-          favoritesList.innerHTML = items.slice(0, 8).map(function (item) {
-            var q = item.question ? '<div class="detail">问：' + escapeHtml(item.question) + '</div>' : '';
-            return '<div class="item">' +
-              '<div class="title">' + escapeHtml(item.text || '') + '</div>' + q +
-              '</div>';
-          }).join('');
-        }
-
-        remindersList.addEventListener('click', function (ev) {
-          var btn = ev.target.closest('button[data-act]');
-          if (!btn) return;
-          var act = btn.getAttribute('data-act');
-          var id = btn.getAttribute('data-id');
-          window.__DSH_REMINDER_ACTION__ = { act: act, id: id, at: Date.now() };
-          if (window.dshOverlay && typeof window.dshOverlay.send === 'function') {
-            window.dshOverlay.send('dsh:reminder-action', { act: act, id: id });
-          }
+        window.addEventListener('mousemove', function (event) {
+          var el = document.elementFromPoint(event.clientX, event.clientY);
+          var hit = !!(el && el.closest && el.closest('.hit'));
+          setIgnore(!hit);
+        });
+        document.documentElement.addEventListener('mouseleave', function () {
+          setIgnore(true);
         });
 
         window.__DSH_OVERLAY__ = {
           setBubble: setBubble,
-          setCalibration: setCalibration,
-          setReminders: setReminders,
-          setFavorites: setFavorites,
+          applyMode: applyMode,
         };
 
         if (window.dshOverlay && typeof window.dshOverlay.on === 'function') {
           window.dshOverlay.on('dsh:bubble', setBubble);
-          window.dshOverlay.on('dsh:calibration', setCalibration);
-          window.dshOverlay.on('dsh:reminders', setReminders);
-          window.dshOverlay.on('dsh:favorites', setFavorites);
         }
 
-        var lastSeq = -1;
         setInterval(function () {
           var state = window.__DSH_OVERLAY_STATE__;
           if (!state) return;
+          applyMode(state.mode);
           if (state.seq !== lastSeq) {
             lastSeq = state.seq;
             if (state.bubble) setBubble({ text: state.bubble });
-            if (state.calibration) setCalibration(state.calibration);
-            if (state.reminders) setReminders({ items: state.reminders });
-            if (state.favorites) setFavorites({ items: state.favorites });
           }
         }, 300);
       })();

@@ -102,14 +102,16 @@ export const DEFAULT_CONFIG = Object.freeze({
     spoilerDefault: 'light',
   }),
 
-  /** 悬浮窗 */
+  /** 桌宠形象窗（圆形静态图 + 旁边气泡） */
   overlay: Object.freeze({
     enabled: true,
     alwaysOnTop: true,
-    width: 460,
-    height: 260,
+    width: 300,
+    height: 220,
+    margin: 16,
+    /** 跟随游戏窗口 / 回到桌面的探测间隔（毫秒）。不触发识屏。 */
+    placementIntervalMs: 800,
     opacity: 0.92,
-    /** 可拖动（占位实现） */
     draggable: true,
   }),
 

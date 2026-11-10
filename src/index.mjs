@@ -331,6 +331,82 @@ export function createHost(options = {}) {
     return state.calibration;
   }
 
+  /**
+   * 强制识一屏（问答 / screen_look 工具共用）。
+   * 不走少说闸门；前台不是游戏也会尽量截，并标明 isGame。
+   */
+  async function lookScreen() {
+    let windowInfo = null;
+    try {
+      windowInfo = await probe();
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'probe-failed',
+        captureOk: false,
+        isGame: false,
+        windowTitle: '',
+        gameDate: state.calibration.gameDate,
+        timeSlot: state.calibration.timeSlot,
+        vision: {
+          scene: 'unknown',
+          summary: '',
+          suggestion: '',
+          spoilerLevel: 0,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      };
+    }
+
+    const isGame = isGameWindow(windowInfo, config.gameWindow);
+    const windowTitle = String(windowInfo?.title || '');
+    let visionResult = null;
+    let captureOk = false;
+
+    try {
+      if (windowInfo && capture) {
+        const shot = await capture(windowInfo);
+        const imageBase64 = bufferToBase64(shot.buffer);
+        visionResult = await vision.describe({
+          imageBase64,
+          mimeType: shot.mimeType ?? 'image/png',
+        });
+        captureOk = true;
+      } else if (vision?.describe) {
+        visionResult = await vision.describe({
+          imageBase64: 'AA==',
+          mimeType: 'image/png',
+        });
+      }
+    } catch (err) {
+      visionResult = {
+        scene: 'unknown',
+        summary: '',
+        suggestion: '',
+        spoilerLevel: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    if (visionResult) state.lastVision = visionResult;
+
+    return {
+      ok: true,
+      reason: captureOk ? '' : 'no-capture',
+      captureOk,
+      isGame,
+      windowTitle,
+      gameDate: state.calibration.gameDate,
+      timeSlot: state.calibration.timeSlot,
+      vision: visionResult || {
+        scene: 'unknown',
+        summary: '',
+        suggestion: '',
+        spoilerLevel: 0,
+      },
+    };
+  }
+
   async function ask(question, askOptions = {}) {
     const askCtx = {
       capture,
@@ -370,7 +446,9 @@ export function createHost(options = {}) {
     stop,
     runOnce,
     setCalibration,
+    lookScreen,
     ask,
+    getKnowledge: getPack,
     refreshReminders() {
       const list = reminderStore.refresh(state.calibration.gameDate);
       pushOverlayLists();

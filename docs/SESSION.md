@@ -2,7 +2,7 @@
 
 > **用途**：后续会话 / 聊天记忆相关开发，以本文为准；可随时改勾选与优先级。  
 > **关联**：[SPEC.md](./SPEC.md)（产品规格）· [PLAN.md](./PLAN.md)（总批次）· [ACCEPTANCE.md](./ACCEPTANCE.md)  
-> **状态**：Session-0/1 已落地；Session-1.5（会话落到工作区目录）已落地；Session-2 inject 已通，工具注册待补  
+> **状态**：Session-0/1/1.5 已落地；Session-2 inject + `screen_look`/`glossary_lookup` 已通；SOUL/提醒工具待补  
 > **更新**：2026-11-10  
 
 ---
@@ -35,7 +35,7 @@
 | 收藏 | ✅ `favorites.json`（不是对话记忆） |
 | 创建 / resume DSH Session | ✅ `src/host/session.mjs`（agents 软取） |
 | `followup` / `inject` 进 Session | ✅ 提问前 inject 识屏摘要 + glossary |
-| Session 内游戏工具 | ❌（仍用 inject；工具注册待 Session-2 补完） |
+| Session 内游戏工具 | ✅ `screen_look` / `glossary_lookup`（create/resume setup 注册；无 defineTool 则跳过） |
 | 长期记忆 sidecar | ❌（仅有 SOUL / MEMORY 占位） |
 | 热键提问 | ❌ |
 
@@ -105,10 +105,10 @@
 
 ### 4.4 Session 内工具 — P1
 
-- [ ] `screen_look`：强制识一屏，返回结构化 JSON 摘要
-- [ ] `glossary_lookup`：查知识包
+- [x] `screen_look`：强制识一屏，返回结构化 JSON 摘要
+- [x] `glossary_lookup`：查知识包
 - [ ] `reminders_list` / `calibrate_date`（可后挪）
-- [ ] 工具描述强调剧透档 / 少说边界
+- [x] 工具描述强调剧透档 / 少说边界
 
 ### 4.5 聊天记忆（长期）— P2
 
@@ -152,7 +152,7 @@
 ### Session-2 — 识屏 inject + 基础工具
 
 - [x] 提问链路：识屏摘要 inject + followup
-- [ ] 工具：`screen_look`、`glossary_lookup`（注册到 agent.ctx）
+- [x] 工具：`screen_look`、`glossary_lookup`（注册到 agent.ctx；见 `src/host/companion-tools.mjs`）
 - [ ] SOUL 进 system
 - [ ] 气泡短句（可选，完善 extract）
 
@@ -190,7 +190,9 @@
 
 | 路径 | 角色 |
 | --- | --- |
-| `src/host/session.mjs` | Session ensure/resume/followup/inject |
+| `src/host/session.mjs` | Session ensure/resume/followup/inject；create/resume `setup` 挂工具 |
+| `src/host/companion-tools.mjs` | `screen_look` / `glossary_lookup` 定义与注册 |
+| `src/index.mjs` | `host.lookScreen` / `getKnowledge` 供工具调用 |
 | `src/ask/ask.mjs` | `askCompanion` + `askOnce` |
 | `src/dsh-plugin.mjs` | `/session*`、`/ask`、挂 session 到 host |
 | `src/host/settings-store.mjs` | `companionSessionId`、`sessionAttachImages` |
@@ -224,3 +226,4 @@
 | 2026-11-09 | 初稿：缺口分析 + Session-0/1/2/3 批次 |
 | 2026-11-09 | 落地 Session-0/1 + inject；拍板主动开口不入 Session、摘要 inject、agents 软取 |
 | 2026-11-10 | 落地 Session-1.5：create 带 `meta.cwd`、resume 用 `resumeSessionId`、工作区优先走 `ctx.workspaceRegistry`、会话标题固定「陪玩」；版本 0.2.7 |
+| 2026-11-10 | Session-2：注册 `screen_look` / `glossary_lookup`（setup + agent.ctx；软载 defineTool） |

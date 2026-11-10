@@ -28,6 +28,20 @@ import {
   readDshState,
   upsertDshProvider,
 } from './host/dsh-settings.mjs';
+
+/** 陪玩 Session 用的对话模型：优先 DSH 默认，再退回第一个可用 provider/model */
+function resolveCompanionAgentOptions(env = process.env) {
+  const state = readDshState(env);
+  const provider = String(state.defaultProvider || '').trim();
+  const model = String(state.defaultModel || '').trim();
+  if (provider && model) return { provider, model };
+  const first = state.providers?.[0];
+  const firstModel = first?.models?.[0];
+  if (first?.id && firstModel?.id) {
+    return { provider: String(first.id), model: String(firstModel.id) };
+  }
+  return {};
+}
 import {
   DEFAULT_SETTINGS,
   normalizeSettings,
@@ -253,6 +267,9 @@ export function apply(ctx, config = {}) {
   // DSH 官方工作区注册表（可空）：有就走官方 API，侧边栏立刻能看到
   const workspaceRegistry = () => optionalService(ctx, 'workspaceRegistry');
 
+  /** 先占位，buildHostParts 之后 parts 才有宿主能力；工具 execute 时再读。 */
+  let parts = null;
+
   const sessionManager = createCompanionSessionManager({
     getAgents: () => getAgents(ctx),
     getSettings: () => live,
@@ -265,10 +282,31 @@ export function apply(ctx, config = {}) {
     getWorkspaceRegistry: () => optionalService(ctx, 'workspaceRegistry'),
     // 官方会话标题服务：给陪玩会话固定一个标题
     getSessionTitle: () => optionalService(ctx, 'sessionTitle'),
+    // 对话模型：避免 create 时空 agentOptions → unveil/followup 报 no provider/model
+    getAgentOptions: () => resolveCompanionAgentOptions(),
+    getAgentDefaultModel: () => optionalService(ctx, 'agentDefaultModel'),
+    getToolDeps: () => {
+      const host = parts?.host;
+      return {
+        lookScreen: () =>
+          host?.lookScreen?.() ??
+          Promise.resolve({
+            ok: false,
+            reason: 'host-unavailable',
+            captureOk: false,
+            vision: { scene: 'unknown', summary: '', suggestion: '', spoilerLevel: 0 },
+          }),
+        getKnowledge: () => host?.getKnowledge?.() ?? { glossary: [] },
+        getSpoilerTier: () =>
+          host?.config?.policy?.spoilerDefault || live?.spoilerDefault || 'light',
+        getGameDate: () => host?.state?.calibration?.gameDate || live?.calibrateDate || '',
+        getTimeSlot: () => host?.state?.calibration?.timeSlot || '',
+      };
+    },
     trace: (line) => trace(line),
   });
 
-  let parts = buildHostParts(live, logger, sessionManager);
+  parts = buildHostParts(live, logger, sessionManager);
 
   const restartHost = (nextLive) => {
     try {

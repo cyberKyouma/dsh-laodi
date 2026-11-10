@@ -36,5 +36,5 @@
 - [x] Session-0 探测与设计冻结
 - [x] Session-1 固定 Session + 文字多轮
 - [x] Session-1.5 会话落到工作区目录（create 带 cwd / resumeSessionId / 官方注册表挂载 / 固定标题）
-- [~] Session-2 识屏 inject + 基础工具（inject 已通；agent 工具注册待补）
+- [~] Session-2 识屏 inject + 基础工具（inject + screen_look/glossary_lookup 已通；SOUL/提醒工具待补）
 - [ ] Session-3 长期记忆与打磨

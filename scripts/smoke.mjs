@@ -447,6 +447,7 @@ await test('mock agents：ensure + 两轮 followup 共 Session，inject 带上�
         Object.assign(store, patch);
         return store;
       },
+      getAgentOptions: () => ({ provider: 'magpie', model: 'deepseek/deepseek-flash' }),
     });
 
     const first = await session.ensure();
@@ -574,6 +575,7 @@ await test('create 带 meta.cwd、resume 用 resumeSessionId、挂载走官方�
         return store;
       },
       getWorkspaceRegistry: () => registry,
+      getAgentOptions: () => ({ provider: 'magpie', model: 'deepseek/deepseek-flash' }),
     });
 
     const first = await session.ensure();
@@ -585,6 +587,8 @@ await test('create 带 meta.cwd、resume 用 resumeSessionId、挂载走官方�
       wsDir,
       '建会话必须带 meta.cwd，否则会落到 ~/.dsh/sessions/_no-cwd',
     );
+    assert.equal(createCalls[0].agentOptions?.provider, 'magpie');
+    assert.equal(createCalls[0].agentOptions?.model, 'deepseek/deepseek-flash');
     assert.deepEqual(attached, [first.sessionId], '会话要挂到工作区');
     assert.equal(session.describe().cwd, wsDir);
     assert.equal(session.describe().attached, true);
@@ -649,6 +653,7 @@ await test('工作区目录不存在时也能建出会话（cwd 目录会被创�
         Object.assign(store, patch);
         return store;
       },
+      getAgentOptions: () => ({ provider: 'magpie', model: 'deepseek/deepseek-flash' }),
     });
     const ensured = await session.ensure();
     assert.equal(ensured.ok, true);
@@ -668,6 +673,228 @@ await test('设置回传不泄露视觉密钥明文', async () => {
   assert.equal(shown.visionApiKey, '__SET__');
   assert.equal(shown.hasVisionApiKey, true);
   assert.ok(!JSON.stringify(shown).includes('sk-secret-value'));
+});
+
+await test('companion tools：screen_look / glossary_lookup 执行与注册', async () => {
+  const {
+    executeScreenLook,
+    executeGlossaryLookup,
+    registerCompanionTools,
+    TOOL_SCREEN_LOOK,
+    TOOL_GLOSSARY_LOOKUP,
+  } = await import('../src/host/companion-tools.mjs');
+
+  const screen = await executeScreenLook({
+    lookScreen: async () => ({
+      ok: true,
+      captureOk: true,
+      isGame: true,
+      windowTitle: 'Persona5Royal',
+      gameDate: '04/17',
+      timeSlot: 'after-school',
+      vision: {
+        scene: 'street',
+        summary: '涩谷街头',
+        suggestion: '去花坛',
+        spoilerLevel: 0,
+      },
+    }),
+  });
+  assert.equal(screen.ok, true);
+  assert.equal(screen.scene, 'street');
+  assert.equal(screen.summary, '涩谷街头');
+  assert.equal(screen.captureOk, true);
+
+  const hit = executeGlossaryLookup(
+    {
+      getKnowledge: () => ({
+        glossary: [{ id: 'g1', term: 'Persona', brief: '人格面具', spoilerLevel: 0, tags: [] }],
+      }),
+      getSpoilerTier: () => 'light',
+    },
+    'Persona',
+  );
+  assert.equal(hit.found, true);
+  assert.equal(hit.term, 'Persona');
+  assert.ok(hit.brief.includes('人格面具'));
+
+  const miss = executeGlossaryLookup(
+    { getKnowledge: () => ({ glossary: [] }), getSpoilerTier: () => 'light' },
+    '不存在的词',
+  );
+  assert.equal(miss.found, false);
+
+  const registered = [];
+  const fakeDefineTool = (spec) => spec;
+  const agentCtx = {
+    tools: {
+      register(def) {
+        registered.push(def.name);
+      },
+    },
+  };
+  const result = await registerCompanionTools(
+    agentCtx,
+    () => ({
+      lookScreen: async () => ({
+        ok: true,
+        captureOk: true,
+        vision: { scene: 'street', summary: 'x', suggestion: '', spoilerLevel: 0 },
+      }),
+      getKnowledge: () => ({ glossary: [] }),
+      getSpoilerTier: () => 'light',
+    }),
+    { defineTool: fakeDefineTool },
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(registered, [TOOL_SCREEN_LOOK, TOOL_GLOSSARY_LOOKUP]);
+});
+
+await test('mock agents create/resume 带 setup 会注册陪玩工具', async () => {
+  const { createCompanionSessionManager } = await import('../src/host/session.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-tools-'));
+  const env = { DSH_HOME: tmpHome };
+  const { ensureCompanionWorkspace } = await import('../src/host/workspace.mjs');
+  const ws = ensureCompanionWorkspace({
+    env,
+    workspacePath: path.join(tmpHome, 'ws'),
+    workspaceTitle: '陪玩',
+  });
+  const store = { companionSessionId: '', workspaceId: ws.workspace.id };
+  const setups = [];
+  const agentsById = new Map();
+
+  function makeAgent(id) {
+    const registered = [];
+    return {
+      id,
+      status: 'idle',
+      session: { id, header: { cwd: ws.workspace.path } },
+      ctx: {
+        tools: {
+          register(def) {
+            registered.push(def.name);
+          },
+        },
+      },
+      registered,
+      inject() {},
+      followup() {},
+      whenIdle: async () => {},
+    };
+  }
+
+  const agents = {
+    get(id) {
+      return agentsById.get(id) || null;
+    },
+    async create(opts) {
+      const agent = makeAgent(opts.sessionId);
+      if (typeof opts.setup === 'function') {
+        setups.push('create');
+        const setupRet = await opts.setup(agent.ctx, agent);
+        // DSH 会把 setup 返回值当成 AgentSetupCommit 调 .commit()；不能返回普通对象
+        assert.equal(
+          setupRet,
+          undefined,
+          'setup 不得返回值，否则会出现 setupCommit?.commit is not a function',
+        );
+      }
+      agentsById.set(opts.sessionId, agent);
+      return { agent, async dispose() {} };
+    },
+    async resume() {
+      throw new Error('no resume in this test');
+    },
+  };
+
+  const prevEnv = process.env.DSH_HOME;
+  process.env.DSH_HOME = tmpHome;
+  try {
+    const session = createCompanionSessionManager({
+      getAgents: () => agents,
+      getSettings: () => store,
+      persistSettings: (patch) => {
+        Object.assign(store, patch);
+        return store;
+      },
+      getAgentOptions: () => ({ provider: 'magpie', model: 'deepseek/deepseek-flash' }),
+      getToolDeps: () => ({
+        lookScreen: async () => ({
+          ok: true,
+          captureOk: true,
+          vision: { scene: 'street', summary: '', suggestion: '', spoilerLevel: 0 },
+        }),
+        getKnowledge: () => ({ glossary: [] }),
+        getSpoilerTier: () => 'light',
+      }),
+    });
+    // 注入假 defineTool：通过全局动态 import 路径不可控，改用 installTools 直测
+    const agent = makeAgent('manual');
+    const { registerCompanionTools } = await import('../src/host/companion-tools.mjs');
+    const installed = await registerCompanionTools(
+      agent.ctx,
+      () => ({
+        lookScreen: async () => ({
+          ok: true,
+          captureOk: true,
+          vision: { scene: 'street', summary: '', suggestion: '', spoilerLevel: 0 },
+        }),
+        getKnowledge: () => ({ glossary: [] }),
+      }),
+      { defineTool: (spec) => spec },
+    );
+    assert.equal(installed.ok, true);
+    assert.ok(agent.registered.includes('screen_look'));
+    assert.ok(agent.registered.includes('glossary_lookup'));
+
+    const ensured = await session.ensure();
+    assert.equal(ensured.ok, true);
+    assert.ok(setups.includes('create'));
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prevEnv;
+  }
+});
+
+await test('缺少 provider/model 时拒绝 create', async () => {
+  const { createCompanionSessionManager } = await import('../src/host/session.mjs');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-nomodel-'));
+  const env = { DSH_HOME: tmpHome };
+  const { ensureCompanionWorkspace } = await import('../src/host/workspace.mjs');
+  const ws = ensureCompanionWorkspace({
+    env,
+    workspacePath: path.join(tmpHome, 'ws'),
+    workspaceTitle: '陪玩',
+  });
+  const store = { companionSessionId: '', workspaceId: ws.workspace.id, workspacePath: ws.workspace.path };
+  let created = 0;
+  const prevEnv = process.env.DSH_HOME;
+  process.env.DSH_HOME = tmpHome;
+  try {
+    const session = createCompanionSessionManager({
+      getAgents: () => ({
+        get: () => null,
+        create: async () => {
+          created += 1;
+          throw new Error('should not create');
+        },
+        resume: async () => {
+          throw new Error('no resume');
+        },
+      }),
+      getSettings: () => store,
+      persistSettings: (patch) => Object.assign(store, patch),
+      getAgentOptions: () => ({}),
+    });
+    const result = await session.ensure();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'missing-provider-model');
+    assert.equal(created, 0);
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prevEnv;
+  }
 });
 
 await test('agents 不可用时 askCompanion 降级 askOnce', async () => {
@@ -750,6 +977,7 @@ await test('「确保 Session」开场揭晓空白会话，resume 已揭晓时�
         Object.assign(store, patch);
         return store;
       },
+      getAgentOptions: () => ({ provider: 'magpie', model: 'deepseek/deepseek-flash' }),
     });
     const first = await session.ensure();
     assert.equal(first.ok, true);

@@ -21,6 +21,7 @@ import {
   readWorkspaceStore,
   resolveCompanionWorkspaceState,
 } from './workspace.mjs';
+import { registerCompanionTools } from './companion-tools.mjs';
 
 export const SESSION_SOURCE = Object.freeze({ kind: 'dsh-laodi' });
 export const USER_SOURCE = Object.freeze({ kind: 'user' });
@@ -149,6 +150,9 @@ export function extractAssistantReply(agent, handle = null) {
  * @param {(patch: object) => object} options.persistSettings  写入并返回最新 settings
  * @param {() => any} [options.getWorkspaceRegistry]  ctx.workspaceRegistry（可空）
  * @param {() => any} [options.getSessionTitle]       ctx.sessionTitle（可空）
+ * @param {() => object} [options.getToolDeps]         screen_look / glossary_lookup 依赖
+ * @param {() => { provider?: string, model?: string }} [options.getAgentOptions]
+ * @param {() => any} [options.getAgentDefaultModel]  ctx.agentDefaultModel（可空）
  * @param {string} [options.sessionTitle]              会话标题，默认「陪玩」
  * @param {(line: string) => void} [options.trace]
  * @param {number} [options.idleTimeoutMs]
@@ -160,6 +164,9 @@ export function createCompanionSessionManager(options = {}) {
     persistSettings = () => ({}),
     getWorkspaceRegistry: resolveWorkspaceRegistry = () => undefined,
     getSessionTitle: resolveSessionTitle = () => undefined,
+    getToolDeps: resolveToolDeps = () => ({}),
+    getAgentOptions: resolveAgentOptionsCb = () => ({}),
+    getAgentDefaultModel: resolveAgentDefaultModel = () => undefined,
     sessionTitle = DEFAULT_SESSION_TITLE,
     trace = () => {},
     idleTimeoutMs = 90_000,
@@ -173,9 +180,65 @@ export function createCompanionSessionManager(options = {}) {
   let lastCwd = '';
   let lastTargetCwd = '';
   let lastAttach = null;
+  let lastTools = null;
 
   function currentId() {
     return String(getSettings()?.companionSessionId || '').trim();
+  }
+
+  /** create/resume setup，或活 agent.ctx：挂 screen_look / glossary_lookup */
+  async function installTools(agentCtx) {
+    try {
+      const result = await registerCompanionTools(agentCtx, resolveToolDeps, { trace });
+      lastTools = result;
+      if (result?.ok) {
+        trace(`companion tools registered: ${(result.registered || []).join(',')}`);
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastTools = { ok: false, reason: 'install-threw', message, registered: [] };
+      trace(`companion tools install failed: ${message}`);
+      return lastTools;
+    }
+  }
+
+  async function setupAgent(agentCtx) {
+    // setup 允许返回 Promise；工厂会 await。
+    // 注意：返回值若是普通对象，DSH 会当成 AgentSetupCommit 并调 .commit()，
+    // 于是出现 setupCommit?.commit is not a function —— 这里必须不返回结果。
+    await installTools(agentCtx);
+  }
+
+  /**
+   * 建/恢复 agent 时必须带 provider+model，否则 followup/unveil 会报：
+   *   has no provider/model: set AgentOptions.provider and AgentOptions.model
+   */
+  function resolveAgentOptions() {
+    try {
+      const fromCb = resolveAgentOptionsCb?.() || {};
+      const provider = String(fromCb.provider || '').trim();
+      const model = String(fromCb.model || '').trim();
+      if (provider && model) return { provider, model };
+    } catch (error) {
+      trace(`getAgentOptions failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    try {
+      const adm = resolveAgentDefaultModel?.();
+      const sel = adm?.currentSelection?.();
+      const provider = String(sel?.provider || '').trim();
+      const model = String(sel?.model || '').trim();
+      if (provider && model) return { provider, model };
+    } catch (error) {
+      trace(
+        `agentDefaultModel.currentSelection failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    return {};
   }
 
   function resolveWorkspaceState() {
@@ -212,6 +275,7 @@ export function createCompanionSessionManager(options = {}) {
       revealed: Boolean(id && currentRevealedId() === id),
       title: sessionTitle,
       lastAttach: lastAttach || null,
+      tools: lastTools,
     };
   }
 
@@ -456,6 +520,7 @@ export function createCompanionSessionManager(options = {}) {
             const attached = await linkWorkspace(sessionId);
             if (attached?.ok || !cwd || liveCwd) {
               applyTitle(live);
+              if (live?.ctx) await installTools(live.ctx);
               return {
                 ok: true,
                 mode: 'session',
@@ -489,7 +554,8 @@ export function createCompanionSessionManager(options = {}) {
           handle = await agents.resume({
             resumeSessionId: sessionId,
             sessionId,
-            agentOptions: {},
+            agentOptions: resolveAgentOptions(),
+            setup: setupAgent,
           });
           const resumedCwd = readSessionCwd(handle?.agent);
           if (cwd && !samePath(resumedCwd, cwd)) {
@@ -507,6 +573,7 @@ export function createCompanionSessionManager(options = {}) {
             lastCwd = resumedCwd;
             await linkWorkspace(sessionId);
             applyTitle(handle?.agent);
+            if (handle?.agent?.ctx) await installTools(handle.agent.ctx);
             trace(`session resumed ${sessionId}`);
             return {
               ok: true,
@@ -529,14 +596,29 @@ export function createCompanionSessionManager(options = {}) {
       }
 
       sessionId = randomUUID();
+      const agentOptions = resolveAgentOptions();
+      if (!agentOptions.provider || !agentOptions.model) {
+        lastError = 'missing-provider-model';
+        lastMode = 'askOnce';
+        return {
+          ok: false,
+          reason: 'missing-provider-model',
+          mode: 'askOnce',
+          message:
+            '无法创建陪玩 Session：未找到默认 provider/model。请先在 DSH 设置里选好对话模型。',
+          ...describe(),
+        };
+      }
       const createOpts = {
         sessionId,
-        agentOptions: {},
+        agentOptions,
+        setup: setupAgent,
       };
       if (cwd) {
         // cwd 会写进不可变的 SessionHeader：落盘目录与工作区成员资格都靠它
         createOpts.meta = { cwd };
       }
+      trace(`session create with ${agentOptions.provider}/${agentOptions.model}`);
       handle = await agents.create(createOpts);
       const resolvedId =
         handle?.agent?.id ||
@@ -716,6 +798,7 @@ export function createCompanionSessionManager(options = {}) {
     describe,
     currentId,
     workspaceSessionCount,
+    installTools,
     buildScreenInjectText,
     buildGlossaryInjectText,
   };

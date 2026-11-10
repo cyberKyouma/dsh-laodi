@@ -24,6 +24,12 @@ import {
   createVisionClient,
 } from '../src/vision/client.mjs';
 import { createOverlayController } from '../src/overlay/overlay.mjs';
+import {
+  computePetBounds,
+  defaultDesktopPosition,
+  resolvePetMode,
+} from '../src/overlay/placement.mjs';
+import { detectDshPet, isDshPetName } from '../src/overlay/pet-conflict.mjs';
 import { createHost } from '../src/index.mjs';
 import { runPolicyTests } from './smoke-policy.mjs';
 
@@ -141,6 +147,11 @@ await test('进程名也能识别游戏窗口', () => {
     false,
   );
   assert.equal(isGameWindow(null, options), false);
+  assert.equal(
+    isGameWindow({ title: 'Windowed Mode', processName: 'Persona5Royal' }, options),
+    true,
+    'Get-Process 的进程名不带 .exe，也要认',
+  );
 });
 
 console.log('vision:');
@@ -234,9 +245,172 @@ await test('Electron 模式下会把状态注入页面脚本', () => {
   assert.ok(script.includes('"seq":1'));
 });
 
+await test('形象位置：桌面右下角，进游戏贴窗口，离开后回到原位', () => {
+  const area = { x: 0, y: 0, width: 1000, height: 800 };
+  const size = { width: 300, height: 220 };
+  const home = defaultDesktopPosition(area, size, 16);
+  assert.equal(home.x, 684);
+  assert.equal(home.y, 564);
+  assert.equal(resolvePetMode({ title: 'Chrome', processName: 'chrome' }, DEFAULT_CONFIG.gameWindow), 'desktop');
+  assert.equal(
+    resolvePetMode({ title: 'Persona 5 Royal', processName: 'game' }, DEFAULT_CONFIG.gameWindow),
+    'game',
+  );
+
+  const game = computePetBounds({
+    mode: 'game',
+    gameRect: { left: 100, top: 50, width: 800, height: 600 },
+    width: 300,
+    height: 220,
+    margin: 16,
+  });
+  assert.equal(game.mode, 'game');
+  assert.equal(game.x, 584);
+  assert.equal(game.y, 414);
+  assert.ok(game.x >= 100 && game.x + game.width <= 900);
+  assert.ok(game.y >= 50 && game.y + game.height <= 650);
+
+  const back = computePetBounds({
+    mode: 'desktop',
+    desktopPosition: home,
+    width: 300,
+    height: 220,
+  });
+  assert.equal(back.mode, 'desktop');
+  assert.equal(back.x, home.x);
+  assert.equal(back.y, home.y);
+});
+
+await test('Electron 形象窗跟随游戏窗口，拖回桌面后记住位置', () => {
+  const windows = [];
+  class FakeBrowserWindow {
+    constructor() {
+      windows.push(this);
+      this.bounds = { x: 0, y: 0, width: 300, height: 220 };
+      this.listeners = {};
+      this.webContents = {
+        send() {},
+        executeJavaScript() {
+          return Promise.resolve([]);
+        },
+      };
+    }
+    isDestroyed() { return false; }
+    loadFile() {}
+    show() { this.visible = true; }
+    showInactive() { this.visible = true; this.inactive = true; }
+    hide() { this.visible = false; }
+    setAlwaysOnTop() {}
+    setVisibleOnAllWorkspaces() {}
+    setIgnoreMouseEvents(ignore) { this.ignoreMouse = ignore; }
+    setBounds(bounds) { this.bounds = { ...this.bounds, ...bounds }; }
+    getBounds() { return { ...this.bounds }; }
+    on(event, cb) { this.listeners[event] = cb; }
+    destroy() { this.destroyed = true; }
+  }
+
+  const overlay = createOverlayController({
+    config: { overlay: { width: 300, height: 220, margin: 16 } },
+    electron: {
+      BrowserWindow: FakeBrowserWindow,
+      screen: {
+        getPrimaryDisplay() {
+          return { workArea: { x: 0, y: 0, width: 1000, height: 800 } };
+        },
+      },
+    },
+    logger: silentLogger,
+  });
+  assert.equal(overlay.show(), true);
+  const win = windows[0];
+  assert.equal(win.inactive, true, '出场时不抢焦点');
+  const home = overlay.place({ mode: 'desktop' });
+  assert.equal(home.x, 684);
+  assert.equal(home.y, 564);
+  assert.equal(overlay.pageState.mode, 'desktop');
+
+  win.setBounds({ x: 40, y: 50, width: 300, height: 220 });
+  win.listeners.move();
+  const game = overlay.place({
+    mode: 'game',
+    gameRect: { left: 100, top: 50, width: 800, height: 600 },
+  });
+  assert.equal(overlay.mode, 'game');
+  assert.equal(game.x, 584);
+  assert.equal(game.y, 414);
+  assert.equal(overlay.pageState.mode, 'game');
+
+  win.setBounds({ x: 584, y: 374, width: 300, height: 220 });
+  win.listeners.move();
+  const nudged = overlay.place({
+    mode: 'game',
+    gameRect: { left: 100, top: 50, width: 800, height: 600 },
+  });
+  assert.equal(nudged.y, 374);
+
+  const back = overlay.place({ mode: 'desktop' });
+  assert.equal(back.x, 40);
+  assert.equal(back.y, 50);
+  assert.equal(overlay.pageState.mode, 'desktop');
+  overlay.handleRendererMessage('dsh-laodi:hit-test', { ignore: true });
+  assert.equal(win.ignoreMouse, true);
+  overlay.destroy();
+});
+
+await test('检测到 dsh-pet 时不创建第二个形象', () => {
+  assert.equal(isDshPetName('dsh-laodi'), false);
+  assert.equal(isDshPetName('dsh-pet'), true);
+  const made = [];
+  class FakeBrowserWindow {
+    constructor() { made.push(this); }
+  }
+  const overlay = createOverlayController({
+    electron: { BrowserWindow: FakeBrowserWindow },
+    petConflict: { loaded: true, notice: '检测到 dsh-pet 也在运行' },
+    logger: silentLogger,
+  });
+  assert.equal(overlay.show(), false);
+  overlay.speak('不该出现');
+  assert.equal(overlay.lastBubble, '不该出现');
+  assert.equal(made.length, 0);
+  assert.equal(overlay.status().suppressed, true);
+  assert.match(overlay.status().notice, /dsh-pet/);
+
+  const loaded = detectDshPet({
+    ctx: { plugins: [{ name: 'dsh-pet' }] },
+    moduleCache: [],
+    existsSync: () => false,
+    env: { DSH_HOME: path.join(os.tmpdir(), 'dsh-laodi-no-pet') },
+  });
+  assert.equal(loaded.loaded, true);
+  assert.match(loaded.notice, /关闭/);
+
+  const viaSettings = detectDshPet({
+    petPluginId: 'dsh-pet',
+    moduleCache: [],
+    existsSync: () => false,
+    env: { DSH_HOME: path.join(os.tmpdir(), 'dsh-laodi-no-pet') },
+  });
+  assert.equal(viaSettings.loaded, true);
+  assert.ok(viaSettings.reasons.includes('settings'));
+
+  const installedOnly = detectDshPet({
+    pluginNames: ['dsh-laodi'],
+    moduleCache: [],
+    existsSync: (file) => String(file).includes(`${path.sep}dsh-pet${path.sep}`),
+    env: { DSH_HOME: path.join(os.tmpdir(), 'dsh-laodi-maybe-pet') },
+  });
+  assert.equal(installedOnly.loaded, false);
+  assert.ok(installedOnly.installedHint);
+});
+
 await test('截图目标目录不得落在项目内', () => {
   assert.equal(isInsideProject(path.join(PROJECT_ROOT, 'shot.png')), true);
-  assert.equal(isInsideProject(path.join('C:\\Temp', 'shot.png')), false);
+  const outside = path.join(os.tmpdir(), 'dsh-laodi-outside', 'shot.png');
+  assert.equal(isInsideProject(outside), false);
+  if (process.platform === 'win32') {
+    assert.equal(isInsideProject(path.join('C:\\Temp', 'shot.png')), false);
+  }
 });
 
 console.log('host loop:');
@@ -335,6 +509,67 @@ await test('主循环 start/stop 可控', async () => {
   await host.stop();
   await running;
   assert.equal(host.state.running, false);
+});
+
+await test('桌面不启动周期识屏；进入 P5R 才识，离开后停', async () => {
+  const config = loadConfig({ env: {} });
+  config.overlay.placementIntervalMs = 200;
+  config.overlay.enabled = false;
+  config.captureIntervalSec = 0.2;
+  let where = 'desktop';
+  let captures = 0;
+  const host = createHost({
+    config,
+    logger: silentLogger,
+    electron: null,
+    probe: async () =>
+      where === 'game'
+        ? {
+            title: 'Persona 5 Royal',
+            processName: 'Persona5Royal',
+            rect: { left: 10, top: 20, width: 800, height: 600 },
+          }
+        : { title: 'Google Chrome', processName: 'chrome' },
+    capture: async () => {
+      captures += 1;
+      return { buffer: Buffer.from('x'), mimeType: 'image/png' };
+    },
+    vision: {
+      describe: async () => ({
+        scene: 'street',
+        summary: '街',
+        suggestion: '',
+        spoilerLevel: 0,
+      }),
+    },
+  });
+
+  const running = host.start();
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(captures, 0, '桌面阶段不能识屏');
+  assert.equal(host.state.screenLoopRunning, false);
+  assert.equal(host.state.petMode, 'desktop');
+  assert.equal(host.overlay.pageState.mode, 'desktop');
+
+  where = 'game';
+  let sawGame = false;
+  for (let i = 0; i < 40 && captures < 1; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  sawGame = captures >= 1;
+  assert.equal(sawGame, true, '进入 P5R 后要识屏');
+  assert.equal(host.state.petMode, 'game');
+  assert.equal(host.overlay.pageState.mode, 'game');
+
+  where = 'desktop';
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.equal(host.state.petMode, 'desktop');
+  assert.equal(host.state.screenLoopRunning, false);
+  const settled = captures;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(captures, settled, '离开游戏后周期识屏要停');
+  await host.stop();
+  await running;
 });
 
 console.log('persona presets:');
@@ -929,6 +1164,95 @@ await test('agents 不可用时 askCompanion 降级 askOnce', async () => {
   assert.equal(result.mode, 'askOnce');
   assert.ok(result.sessionError);
   assert.equal(result.answer.source, 'glossary');
+});
+
+await test('桌面闲聊走同一 Session，且不截屏', async () => {
+  const { createHost } = await import('../src/index.mjs');
+  let captures = 0;
+  let followed = null;
+  const host = createHost({
+    config: loadConfig({ env: {} }),
+    logger: silentLogger,
+    electron: null,
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-desktop-ask-')),
+    probe: async () => ({ title: 'Google Chrome', processName: 'chrome' }),
+    capture: async () => {
+      captures += 1;
+      throw new Error('桌面不该截屏');
+    },
+    vision: {
+      describe: async () => {
+        throw new Error('桌面不该调用视觉');
+      },
+    },
+    session: {
+      followupAsk: async (question, context) => {
+        followed = { question, context };
+        return { ok: true, mode: 'session', reply: '桌面上随便聊聊', session: { id: 'pet-session' } };
+      },
+      describe() {
+        return { id: 'pet-session' };
+      },
+    },
+  });
+  assert.equal(host.overlay.handleRendererMessage('dsh-laodi:chat', { text: '  ' }), false);
+  const accepted = host.overlay.handleRendererMessage('dsh-laodi:chat', { text: '在吗' });
+  assert.equal(accepted, true);
+  const result = await host.ask('在吗', { source: 'pet' });
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'session');
+  assert.equal(result.captureOk, false);
+  assert.equal(captures, 0);
+  assert.equal(followed.question, '在吗');
+  assert.equal(followed.context.screenText, '');
+  assert.equal(host.overlay.lastBubble, '桌面上随便聊聊');
+
+  const looked = await host.lookScreen();
+  assert.equal(looked.ok, false);
+  assert.equal(looked.reason, 'desktop-no-screen-look');
+  assert.equal(captures, 0);
+});
+
+await test('游戏前台提问仍会识屏', async () => {
+  let captures = 0;
+  let screenText = '';
+  const host = createHost({
+    config: loadConfig({ env: {} }),
+    logger: silentLogger,
+    electron: null,
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-laodi-game-ask-')),
+    probe: async () => ({
+      title: 'Persona 5 Royal',
+      processName: 'Persona5Royal',
+      rect: { left: 0, top: 0, width: 1280, height: 720 },
+    }),
+    capture: async () => {
+      captures += 1;
+      return { buffer: Buffer.from('fake'), mimeType: 'image/png' };
+    },
+    vision: {
+      describe: async () => ({
+        scene: 'street',
+        summary: '涩谷街头',
+        suggestion: '去花坛看看',
+        spoilerLevel: 0,
+      }),
+    },
+    session: {
+      followupAsk: async (_question, context) => {
+        screenText = context.screenText;
+        return { ok: true, mode: 'session', reply: '先去花坛', session: { id: 'pet-session' } };
+      },
+      describe() {
+        return { id: 'pet-session' };
+      },
+    },
+  });
+  const result = await host.ask('现在干什么');
+  assert.equal(result.mode, 'session');
+  assert.equal(captures, 1);
+  assert.match(screenText, /涩谷/);
+  assert.equal(host.overlay.lastBubble, '先去花坛');
 });
 
 

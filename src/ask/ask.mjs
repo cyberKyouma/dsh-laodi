@@ -185,24 +185,30 @@ export async function askOnce(ctx = {}, question = '') {
 }
 
 /**
- * 陪玩提问：强制识屏 → glossary → 尽量走 DSH Session followup；失败则 askOnce。
+ * 陪玩提问：游戏前台时识屏 → glossary → 尽量走 DSH Session followup；失败则 askOnce。
+ * 桌面闲聊传 skipScreenLook：不截屏、不 inject 画面摘要，仍走同一条 Session。
  *
  * @param {object} ctx
  * @param {string} question
- * @param {{ forceAskOnce?: boolean }} [options]
+ * @param {{ forceAskOnce?: boolean, skipScreenLook?: boolean, forceScreenLook?: boolean }} [options]
  */
 export async function askCompanion(ctx = {}, question = '', options = {}) {
   const q = String(question ?? '').trim();
   if (!q) return { ok: false, reason: 'empty-question' };
 
-  if (options.forceAskOnce || !ctx.session) {
+  const skipScreenLook = options.skipScreenLook === true && options.forceScreenLook !== true;
+
+  if (options.forceAskOnce || (!ctx.session && !skipScreenLook)) {
     const once = await askOnce(ctx, q);
     if (once.ok) once.mode = options.forceAskOnce ? 'askOnce-forced' : 'askOnce';
     return once;
   }
 
   const { knowledge, config = {}, state = {}, session } = ctx;
-  const { visionResult, captureOk } = await captureVision(ctx);
+  const captured = skipScreenLook
+    ? { visionResult: null, captureOk: false }
+    : await captureVision(ctx);
+  const { visionResult, captureOk } = captured;
 
   const pack = knowledge ?? { glossary: [] };
   const hit = lookupGlossary(
@@ -211,13 +217,31 @@ export async function askCompanion(ctx = {}, question = '', options = {}) {
     config.policy?.spoilerDefault ?? 'light',
   );
 
-  const screenText = buildScreenInjectText({
-    vision: visionResult,
-    gameDate: state.calibration?.gameDate ?? '',
-    timeSlot: state.calibration?.timeSlot ?? '',
-    captureOk,
-  });
+  const screenText = skipScreenLook
+    ? ''
+    : buildScreenInjectText({
+        vision: visionResult,
+        gameDate: state.calibration?.gameDate ?? '',
+        timeSlot: state.calibration?.timeSlot ?? '',
+        captureOk,
+      });
   const glossaryText = buildGlossaryInjectText(hit);
+
+  if (!session) {
+    const answer = composeAnswer({
+      question: q,
+      glossaryHit: hit,
+      vision: visionResult,
+      maxChars: config.bubbleMaxChars ?? 40,
+    });
+    return finishAsk(ctx, {
+      question: q,
+      answer,
+      visionResult,
+      captureOk,
+      mode: 'askOnce',
+    });
+  }
 
   let sessionResult = null;
   try {

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * dsh-laodi 宿主主循环（初版）。
+ * dsh-laodi 宿主。
  *
- * 流程：
- *   1. 探测前台窗口；不是 P5R -> 本轮跳过（不识屏、不开口）
- *   2. 是 P5R -> 截屏（只在内存）-> 视觉模型描述画面
- *   3. 交给 policy/speak 判断「这一轮要不要说」
- *   4. 要说 -> 冒到悬浮窗气泡（<= 40 字）
- *   5. 标定日期后刷新今日提醒；问答强制识一屏并可收藏
+ * 桌宠：平时停在桌面，可拖、可闲聊；P5R 在前台时同一形象跟到游戏窗口。
+ * 识屏循环只在游戏前台跑。桌面阶段不启动周期识屏，桌面闲聊也不截屏。
+ *
+ * 游戏前台一轮：
+ *   1. 截屏（只在内存）-> 视觉模型描述画面
+ *   2. policy/speak 判断要不要说
+ *   3. 要说 -> 形象旁气泡（<= 40 字）
  *
  * 用法：
  *   node src/index.mjs
@@ -25,7 +26,8 @@ import { loadConfig, resolveDataDir } from './config.mjs';
 import { probeForegroundWindow, isGameWindow } from './capture/window.mjs';
 import { captureWindowToBuffer, bufferToBase64 } from './capture/screenshot.mjs';
 import { createVisionClient } from './vision/client.mjs';
-import { createOverlayController } from './overlay/overlay.mjs';
+import { createOverlayController, loadElectronModule } from './overlay/overlay.mjs';
+import { resolvePetMode } from './overlay/placement.mjs';
 import { loadKnowledgePack } from './data/knowledge.mjs';
 import { createReminderStore } from './reminders/store.mjs';
 import { createFavoritesStore } from './favorites/store.mjs';
@@ -52,7 +54,7 @@ export function createHost(options = {}) {
     logger = console,
     clock = () => Date.now() / 1000,
     rng = Math.random,
-    overlay = createOverlayController({ config, logger }),
+    overlay: overlayOption = null,
     capture = captureWindowToBuffer,
     probe = probeForegroundWindow,
     knowledge = null,
@@ -61,6 +63,12 @@ export function createHost(options = {}) {
     favorites = null,
     /** createCompanionSessionManager() 返回值；CLI 无 agents 时可空 */
     session = null,
+    electron = options.electron !== undefined
+      ? options.electron
+      : options.overlay
+        ? null
+        : loadElectronModule(),
+    petConflict = null,
   } = options;
 
   const state = {
@@ -72,10 +80,25 @@ export function createHost(options = {}) {
     lastVision: null,
     lastAsk: null,
     calibration: { gameDate: '', timeSlot: '' },
+    /** desktop：不跑周期识屏。game：才启动识屏循环。 */
+    petMode: 'desktop',
+    screenLoopRunning: false,
+    screenLoopStop: true,
   };
 
-  let wake = null;
-  let timer = null;
+  let askImpl = async () => ({ ok: false, reason: 'not-ready' });
+  const overlay =
+    overlayOption ??
+    createOverlayController({
+      config,
+      logger,
+      electron,
+      petConflict,
+      onChat: (text) => askImpl(text, { source: 'pet' }),
+    });
+
+  const waits = { placement: null, screen: null };
+  let screenLoopActive = false;
   let knowledgePack = knowledge;
 
   const reminderStore =
@@ -122,15 +145,28 @@ export function createHost(options = {}) {
     overlay.setFavorites?.(favoritesStore.list());
   }
 
-  function sleep(ms) {
+  function placementIntervalMs() {
+    const value = Number(config.overlay?.placementIntervalMs);
+    if (!Number.isFinite(value)) return 800;
+    return Math.min(5000, Math.max(200, value));
+  }
+
+  function wait(slot, ms) {
     return new Promise((resolve) => {
-      wake = resolve;
-      timer = setTimeout(() => {
-        wake = null;
-        timer = null;
+      const timer = setTimeout(() => {
+        if (waits[slot]?.resolve === resolve) waits[slot] = null;
         resolve();
       }, ms);
+      waits[slot] = { timer, resolve };
     });
+  }
+
+  function cancelWait(slot) {
+    const pending = waits[slot];
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    waits[slot] = null;
+    pending.resolve();
   }
 
   function collectCandidates(visionResult) {
@@ -274,16 +310,42 @@ export function createHost(options = {}) {
     return { spoke: true, text, scene };
   }
 
-  async function start() {
-    if (state.running) return state;
-    state.running = true;
-    logger.info?.(
-      `[host] 启动：识屏间隔 ${config.captureIntervalSec}s / 开口间隔 ${config.minSpeakGapSec}s / 概率 ${config.speakProbability}`,
-    );
-    if (config.overlay?.enabled) overlay.show?.();
-    pushOverlayLists();
+  async function syncPlacement() {
+    let windowInfo = null;
+    try {
+      windowInfo = await probe();
+    } catch (err) {
+      logger.warn?.(
+        `[host] 前台探测失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!state.running) return { mode: state.petMode, windowInfo };
+    state.lastWindow = windowInfo;
+    const mode = resolvePetMode(windowInfo, config.gameWindow);
+    if (state.petMode !== mode) {
+      logger.info?.(
+        mode === 'game'
+          ? '[host] 进入 P5R，形象跟到游戏窗口'
+          : '[host] 离开游戏，形象回到桌面',
+      );
+    }
+    state.petMode = mode;
+    overlay.place?.({
+      mode,
+      gameRect: mode === 'game' ? windowInfo?.rect : null,
+    });
+    if (mode === 'game') {
+      state.screenLoopStop = false;
+      ensureScreenLoop();
+    } else {
+      state.screenLoopStop = true;
+      cancelWait('screen');
+    }
+    return { mode, windowInfo };
+  }
 
-    while (state.running) {
+  async function runScreenLoop() {
+    while (state.running && !state.screenLoopStop && state.petMode === 'game') {
       try {
         await tick();
       } catch (err) {
@@ -291,24 +353,58 @@ export function createHost(options = {}) {
           `[host] 本轮异常：${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      if (!state.running) break;
-      await sleep(config.captureIntervalSec * 1000);
+      if (!state.running || state.screenLoopStop || state.petMode !== 'game') break;
+      await wait('screen', Math.max(0, Number(config.captureIntervalSec) * 1000));
     }
+  }
+
+  function ensureScreenLoop() {
+    if (screenLoopActive || !state.running) return;
+    screenLoopActive = true;
+    state.screenLoopRunning = true;
+    state.screenLoopStop = false;
+    void (async () => {
+      try {
+        await runScreenLoop();
+      } finally {
+        screenLoopActive = false;
+        state.screenLoopRunning = false;
+      }
+    })();
+  }
+
+  async function start() {
+    if (state.running) return state;
+    state.running = true;
+    state.screenLoopStop = true;
+    logger.info?.(
+      `[host] 启动：桌宠跟随 ${placementIntervalMs()}ms / 识屏间隔 ${config.captureIntervalSec}s（仅游戏前台） / 开口间隔 ${config.minSpeakGapSec}s / 概率 ${config.speakProbability}`,
+    );
+    if (config.overlay?.enabled !== false) overlay.show?.();
+    pushOverlayLists();
+
+    while (state.running) {
+      try {
+        await syncPlacement();
+      } catch (err) {
+        logger.error?.(
+          `[host] 跟随异常：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!state.running) break;
+      await wait('placement', placementIntervalMs());
+    }
+    state.screenLoopStop = true;
+    cancelWait('screen');
     logger.info?.('[host] 已停止');
     return state;
   }
 
   async function stop() {
     state.running = false;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    if (wake) {
-      const resolve = wake;
-      wake = null;
-      resolve();
-    }
+    state.screenLoopStop = true;
+    cancelWait('placement');
+    cancelWait('screen');
     overlay.hide?.();
     overlay.destroy?.();
     return state;
@@ -332,8 +428,8 @@ export function createHost(options = {}) {
   }
 
   /**
-   * 强制识一屏（问答 / screen_look 工具共用）。
-   * 不走少说闸门；前台不是游戏也会尽量截，并标明 isGame。
+   * 识一屏（screen_look 工具）。
+   * 桌面阶段直接拒绝，不截屏。游戏在前台才截，并标明 isGame。
    */
   async function lookScreen() {
     let windowInfo = null;
@@ -359,7 +455,27 @@ export function createHost(options = {}) {
     }
 
     const isGame = isGameWindow(windowInfo, config.gameWindow);
+    state.lastWindow = windowInfo;
+    state.petMode = isGame ? 'game' : 'desktop';
     const windowTitle = String(windowInfo?.title || '');
+    if (!isGame) {
+      return {
+        ok: false,
+        reason: 'desktop-no-screen-look',
+        captureOk: false,
+        isGame: false,
+        windowTitle,
+        gameDate: state.calibration.gameDate,
+        timeSlot: state.calibration.timeSlot,
+        vision: {
+          scene: 'unknown',
+          summary: '桌面阶段不识屏',
+          suggestion: '',
+          spoilerLevel: 0,
+        },
+        message: '桌面阶段不识屏',
+      };
+    }
     let visionResult = null;
     let captureOk = false;
 
@@ -407,7 +523,36 @@ export function createHost(options = {}) {
     };
   }
 
+  async function confirmPetMode() {
+    try {
+      const info = await probe();
+      if (info) state.lastWindow = info;
+      const mode = resolvePetMode(info, config.gameWindow);
+      state.petMode = mode;
+      overlay.place?.({
+        mode,
+        gameRect: mode === 'game' ? info?.rect : null,
+      });
+      return mode;
+    } catch {
+      return state.petMode || 'desktop';
+    }
+  }
+
   async function ask(question, askOptions = {}) {
+    const forceOnce = Boolean(askOptions.forceAskOnce);
+    let skipScreenLook = askOptions.skipScreenLook === true;
+    if (!forceOnce && askOptions.forceScreenLook !== true && askOptions.skipScreenLook !== true) {
+      if (askOptions.source === 'pet') {
+        skipScreenLook = (overlay.mode || state.petMode) !== 'game';
+      }
+      if (!skipScreenLook) {
+        const mode = await confirmPetMode();
+        skipScreenLook = mode !== 'game';
+      }
+    }
+    if (askOptions.forceScreenLook === true) skipScreenLook = false;
+
     const askCtx = {
       capture,
       probe,
@@ -420,9 +565,9 @@ export function createHost(options = {}) {
       bufferToBase64,
       session,
     };
-    const result = askOptions.forceAskOnce
+    const result = forceOnce
       ? await askOnce(askCtx, question)
-      : await askCompanion(askCtx, question, askOptions);
+      : await askCompanion(askCtx, question, { ...askOptions, skipScreenLook });
     state.lastAsk = result;
     pushOverlayLists();
     logger.info?.(
@@ -431,6 +576,17 @@ export function createHost(options = {}) {
         : `[host] 问答失败：${result.reason}`,
     );
     return result;
+  }
+
+  askImpl = ask;
+
+  function petStatus() {
+    const overlayStatus = overlay.status?.() || {};
+    return {
+      ...overlayStatus,
+      mode: overlayStatus.mode || state.petMode,
+      screenLoop: Boolean(state.screenLoopRunning),
+    };
   }
 
   return {
@@ -448,6 +604,7 @@ export function createHost(options = {}) {
     setCalibration,
     lookScreen,
     ask,
+    petStatus,
     getKnowledge: getPack,
     refreshReminders() {
       const list = reminderStore.refresh(state.calibration.gameDate);

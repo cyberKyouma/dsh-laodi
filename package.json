@@ -1,6 +1,6 @@
 {
   "name": "dsh-laodi",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "type": "module",
   "description": "陪玩：识屏建议、找攻略、记事提醒（DSH 插件）",
@@ -50,7 +50,7 @@
       "patch": "./cordis.patch.yml",
       "id": "dsh-laodi",
       "displayName": "陪玩",
-      "version": "0.2.8"
+      "version": "0.2.9"
     },
     "client": {
       "platform": "web",

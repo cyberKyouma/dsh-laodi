@@ -91,17 +91,25 @@ export function matchWindowTitle(title, keywords = []) {
 }
 
 /**
+ * Get-Process 的 ProcessName 不带 .exe，白名单里两种写法都认。
+ */
+export function normalizeProcessName(name) {
+  return String(name ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.exe$/i, '');
+}
+
+/**
  * 纯函数：窗口是否算 P5R 游戏窗口（标题命中，或进程名命中）。
  */
 export function isGameWindow(windowInfo, options = {}) {
   if (!windowInfo) return false;
   const { titleKeywords = [], processNames = [] } = options;
   if (matchWindowTitle(windowInfo.title, titleKeywords)) return true;
-  const proc = String(windowInfo.processName ?? '').trim().toLowerCase();
+  const proc = normalizeProcessName(windowInfo.processName);
   if (!proc) return false;
-  return processNames.some(
-    (name) => String(name ?? '').trim().toLowerCase() === proc,
-  );
+  return processNames.some((name) => normalizeProcessName(name) === proc);
 }
 
 /**
@@ -159,4 +167,5 @@ export default {
   isGameForeground,
   isGameWindow,
   matchWindowTitle,
+  normalizeProcessName,
 };

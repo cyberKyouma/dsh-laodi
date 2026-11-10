@@ -458,10 +458,13 @@ window.__ModuleLoader__.load({
             '先记包名，后续把 persona/SOUL.md·MEMORY.md 交给这些人设插件读。',
           ),
           field(
-            '桌宠插件（预留）',
-            text('petPluginId', '桌宠插件包名'),
-            '预留对接；标记文件 .dsh-laodi-workspace.json 可供桌宠共享工作区身份。',
+            '外部桌宠（冲突检测）',
+            text('petPluginId', '若同时加载了 dsh-pet，填 dsh-pet'),
+            '形象做在本插件里。填了 dsh-pet，或检测到它已加载时，会暂停本插件形象并提示只留一个。',
           ),
+          (runtime.pet && (runtime.pet.notice || runtime.pet.installedHint))
+            ? h('div', { className: NS + '-hint' }, runtime.pet.notice || runtime.pet.installedHint)
+            : null,
           h('div', { className: NS + '-actions' },
             h('button', {
               className: NS + '-btn ' + NS + '-btn--primary',

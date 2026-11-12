@@ -1311,6 +1311,7 @@ await test('「确保 Session」开场揭晓空白会话，resume 已揭晓时�
     assert.equal(unveiled.unveiled, true);
     assert.equal(followups.length, 1);
     assert.ok(String(followups[0]?.content?.[0]?.text || '').includes('P5R'));
+    assert.equal(followups[0]?.role, 'user', '开场必须带 role=user，否则 DSH 重启后无法加载会话');
     assert.equal(store.companionSessionRevealedId, first.sessionId);
     assert.equal(session.describe().revealed, true);
     assert.equal(SESSION_UNVEIL_PROMPT.includes('P5R'), true);

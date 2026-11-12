@@ -380,8 +380,11 @@ export function createHost(options = {}) {
     logger.info?.(
       `[host] 启动：桌宠跟随 ${placementIntervalMs()}ms / 识屏间隔 ${config.captureIntervalSec}s（仅游戏前台） / 开口间隔 ${config.minSpeakGapSec}s / 概率 ${config.speakProbability}`,
     );
+    logger.info?.("[host] start: showing overlay");
     if (config.overlay?.enabled !== false) overlay.show?.();
+    logger.info?.("[host] start: overlay shown");
     pushOverlayLists();
+    logger.info?.("[host] start: entering placement loop");
 
     while (state.running) {
       try {

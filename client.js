@@ -611,8 +611,11 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       apply: function (ctx) {
         ctx.effect(installStyles, 'dsh-laodi: styles');
-        ctx.slots.inject('settings.section', function* () {
-          yield ctx.slots.register(
+        try {
+          void fetch(ROUTE + '/client-ready', { method: 'POST', cache: 'no-store' });
+        } catch (_err) {}
+        ctx.slots.inject('settings.section', function () {
+          return ctx.slots.register(
             { name: 'settings.section', id: 'dsh-laodi-config', order: 32, label: function () { return '陪玩'; } },
             SettingsSection,
           );

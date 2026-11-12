@@ -23,6 +23,7 @@ import { createVisionClient } from './vision/client.mjs';
 import { resolveVisionTarget } from './vision/magpie.mjs';
 import { createHost } from './index.mjs';
 import { loadElectronModule } from './overlay/overlay.mjs';
+import { createWinElectronShim } from './overlay/win-electron.mjs';
 import { detectDshPet } from './overlay/pet-conflict.mjs';
 import {
   normalizeProviderSpec,
@@ -266,6 +267,7 @@ export function apply(ctx, config = {}) {
   trace(`apply() entered (pid ${process.pid})`);
   const logger = ctx?.logger ?? console;
   const user = readUserSettings();
+  trace("apply: settings read");
   let live = mergeLiveSettings(config, user.settings);
 
   // DSH 官方工作区注册表（可空）：有就走官方 API，侧边栏立刻能看到
@@ -309,23 +311,39 @@ export function apply(ctx, config = {}) {
     },
     trace: (line) => trace(line),
   });
+  trace("apply: session manager ready");
 
-  const electron = loadElectronModule();
-  const petFor = (settings) => {
+  let electron = loadElectronModule();
+  trace(`apply: electron=${Boolean(electron?.BrowserWindow)} note=${loadElectronModule.lastNote || ""}`);
+  if (!electron?.BrowserWindow && process.platform === "win32") {
+    try {
+      electron = createWinElectronShim();
+      trace("apply: using win32 overlay shim");
+    } catch (err) {
+      electron = null;
+      trace(`apply: win32 overlay shim failed: ${err && err.message ? err.message : err}`);
+    }
+  }
+  const petFor = (settings, walkCtx = false) => {
+    trace("apply: pet detect start");
+    // Do not walk Cordis ctx during apply(); it can deadlock plugin load.
     const found = detectDshPet({
-      ctx,
+      ctx: walkCtx ? ctx : null,
       electron,
       petPluginId: settings?.petPluginId,
     });
+    trace(`apply: pet detect done loaded=${found.loaded} reasons=${(found.reasons || []).join(",")}`);
     if (found.notice) trace(found.notice);
     else if (found.installedHint) trace(found.installedHint);
     return found;
   };
 
+  trace("apply: buildHostParts start");
   parts = buildHostParts(live, logger, sessionManager, {
     electron,
     petConflict: petFor(live),
   });
+  trace("apply: buildHostParts done");
 
   const runtimeBody = () => ({
     enabled: live.enabled,
@@ -362,67 +380,108 @@ export function apply(ctx, config = {}) {
     }
   };
 
-  if (live.enabled) {
-    parts.host.start();
-    if (live.calibrateDate) {
-      try {
-        parts.host.setCalibration?.(live.calibrateDate);
-      } catch {
-        // ignore
-      }
+  const startHost = () => {
+    if (!live.enabled) {
+      trace("host not started (enabled=false)");
+      return;
     }
-    trace(`host started model=${parts.hostConfig.vision.model} mock=${parts.vision.isMock}`);
-  } else {
-    trace('host not started (enabled=false)');
-  }
-
-  if (typeof ctx?.effect === 'function') {
-    ctx.effect(
-      () => () => {
+    try {
+      trace("apply: host.start begin");
+      parts.host.start();
+      trace("apply: host.start returned");
+      if (live.calibrateDate) {
         try {
-          parts.host.stop();
-          trace('host stopped');
-        } catch (err) {
-          trace(`host stop error: ${err?.message || err}`);
-        }
-        try {
-          void sessionManager.dispose?.();
+          parts.host.setCalibration?.(live.calibrateDate);
         } catch {
           // ignore
         }
-      },
-      'dsh-laodi: host loop',
-    );
-
-    if (ctx.webServer && typeof ctx.webServer.register === 'function') {
-      ctx.effect(
-        () =>
-          ctx.webServer.register({
-            kind: 'prefix',
-            path: ROUTE_PREFIX,
-            handler: async (req, res) => {
-              try {
-                const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-                await handleRoute(req, res, url);
-              } catch (error) {
-                sendJson(res, 500, {
-                  ok: false,
-                  reason: 'internal',
-                  message: error instanceof Error ? error.message : String(error),
-                });
-              }
-            },
-          }),
-        'dsh-laodi: settings routes',
-      );
-    } else {
-      trace('webServer missing; settings card API not registered');
+      }
+      trace(`host started model=${parts.hostConfig.vision.model} mock=${parts.vision.isMock}`);
+    } catch (err) {
+      trace(`host.start error: ${err?.message || err}`);
     }
+  };
+
+  // Register routes on the plugin lifetime disposer, not ctx.effect().
+  // Cordis effect wrappers are thenable; awaiting them disposes the route.
+  let unregisterRoutes = () => {};
+  if (ctx.webServer && typeof ctx.webServer.register === 'function') {
+    try {
+      const dispose = ctx.webServer.register({
+        kind: 'prefix',
+        path: ROUTE_PREFIX,
+        handler: async (req, res) => {
+          try {
+            const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+            await handleRoute(req, res, url);
+          } catch (error) {
+            sendJson(res, 500, {
+              ok: false,
+              reason: 'internal',
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      });
+      if (typeof dispose === 'function') unregisterRoutes = dispose;
+      trace('apply: settings routes registered');
+    } catch (err) {
+      trace(`apply: settings routes failed: ${err?.message || err}`);
+    }
+  } else {
+    trace('webServer missing; settings card API not registered');
   }
+
+  // Overlay window creation is too slow to run inside apply(); DSH may dispose the plugin if we block here.
+  setImmediate(startHost);
+  trace("apply: startHost scheduled");
 
   async function handleRoute(req, res, url) {
     const route = url.pathname.slice(ROUTE_PREFIX.length) || '/';
     const method = (req.method ?? 'GET').toUpperCase();
+
+    if (method === 'POST' && route === '/client-ready') {
+      trace('client apply reached');
+      sendJson(res, 200, { ok: true }, { 'cache-control': 'no-store' });
+      return;
+    }
+
+    if (method === 'GET' && route === '/debug/graph') {
+      let err = null;
+      let graph = null;
+      let clientPath = null;
+      let hasService = false;
+      let loaderNames = [];
+      try {
+        const clientModules = optionalService(ctx, 'clientModules');
+        hasService = Boolean(clientModules);
+        graph = clientModules?.graph?.() ?? null;
+        clientPath = clientModules?.clientPath?.('dsh-laodi') ?? null;
+        const loader = optionalService(ctx, 'loader');
+        const loaded = loader?.entries?.();
+        if (loaded) {
+          loaderNames = [...loaded]
+            .map((entry) => entry?.options?.name ?? entry?.name ?? null)
+            .filter(Boolean);
+        }
+      } catch (error) {
+        err = error instanceof Error ? error.message : String(error);
+      }
+      const entries = Array.isArray(graph?.entries) ? graph.entries : [];
+      sendJson(res, 200, {
+        hasService,
+        err,
+        entryCount: entries.length,
+        clientPath,
+        laodi: entries.find((entry) => String(entry.id).includes('laodi')) ?? null,
+        loaderHasLaodi: loaderNames.some((name) => String(name).includes('laodi')),
+        ids: entries.map((entry) => entry.id),
+        inject: entries
+          .filter((entry) => String(entry.id).includes('laodi'))
+          .map((entry) => ({ id: entry.id, inject: entry.inject, immediately: entry.immediately })),
+      }, { 'cache-control': 'no-store' });
+      return;
+    }
 
     if (method === 'GET' && (route === '/' || route === '/config')) {
       const { dsh, dshProviders, dshModels } = describeDsh();
@@ -816,7 +875,24 @@ export function apply(ctx, config = {}) {
   }
 
   trace('apply() done');
-  return parts.host;
+  return () => {
+    try {
+      unregisterRoutes();
+    } catch {
+      // ignore
+    }
+    try {
+      parts.host.stop();
+      trace('host stopped');
+    } catch (err) {
+      trace(`host stop error: ${err?.message || err}`);
+    }
+    try {
+      void sessionManager.dispose?.();
+    } catch {
+      // ignore
+    }
+  };
 }
 
 export default { name, inject, apply, ROUTE_PREFIX };

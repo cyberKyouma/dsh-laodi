@@ -11,3 +11,5 @@ coverage/
 *.jpg
 tmp/
 .local/
+
+*.bak-*

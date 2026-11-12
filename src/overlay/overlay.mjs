@@ -8,6 +8,9 @@
  * 形象是 runtime/overlay/pet.svg，不使用「老弟」立绘。
  */
 
+import { appendFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 import { OVERLAY_HTML, OVERLAY_PRELOAD } from '../paths.mjs';
@@ -29,15 +32,37 @@ export const OVERLAY_CHANNELS = Object.freeze({
 });
 
 /** DSH 主进程里能拿到 electron；普通 node / 冒烟拿不到。 */
+
+function fileTrace(line) {
+  try {
+    const home = process.env.DSH_HOME || path.join(homedir(), ".dsh");
+    appendFileSync(path.join(home, "dsh-laodi.log"), `[${new Date().toISOString()}] ${line}\n`, "utf8");
+  } catch {
+    // ignore
+  }
+}
+
 export function loadElectronModule() {
+  const notes = [
+    `type=${process.type || "none"}`,
+    `electronVer=${process.versions?.electron || "no"}`,
+    `runAsNode=${process.env.ELECTRON_RUN_AS_NODE || ""}`,
+  ];
   try {
     const require = createRequire(import.meta.url);
     const loaded = require('electron');
     if (!loaded || typeof loaded !== 'object' || typeof loaded.BrowserWindow !== 'function') {
+      const typ = loaded == null ? "null" : typeof loaded;
+      notes.push(`require=${typ}`);
+      loadElectronModule.lastNote = notes.join("; ");
       return null;
     }
+    notes.push("require=ok");
+    loadElectronModule.lastNote = notes.join("; ");
     return loaded;
-  } catch {
+  } catch (err) {
+    notes.push(`require=err:${err && err.message ? err.message : err}`);
+    loadElectronModule.lastNote = notes.join("; ");
     return null;
   }
 }
@@ -56,6 +81,10 @@ export function createOverlayController(options = {}) {
     onChat = null,
   } = options;
 
+  const info = (...args) => {
+    try { logger.info?.(...args); } catch { /* ignore */ }
+    fileTrace(args.map((item) => (typeof item === "string" ? item : String(item))).join(" "));
+  };
   const available = Boolean(electron?.BrowserWindow);
   const suppressed = Boolean(petConflict?.loaded);
   const conflictNotice = String(petConflict?.notice || '');
@@ -207,6 +236,7 @@ export function createOverlayController(options = {}) {
     if (!available || suppressed) return null;
     if (window && !window.isDestroyed?.()) return window;
     const initial = boundsFor(mode);
+    info(`[overlay] creating BrowserWindow at ${initial.x},${initial.y} ${initial.width}x${initial.height}`);
     window = new electron.BrowserWindow({
       x: initial.x,
       y: initial.y,
@@ -241,8 +271,10 @@ export function createOverlayController(options = {}) {
       window = null;
       shown = false;
     });
+    info("[overlay] BrowserWindow created, loading html");
     window.loadFile?.(OVERLAY_HTML);
     bindIpc();
+    info("[overlay] window ready");
     return window;
   }
 
@@ -435,11 +467,13 @@ export function createOverlayController(options = {}) {
       };
     },
     show() {
+      info("[overlay] show()");
       if (suppressed) {
         warnConflict();
         return false;
       }
       const win = ensureWindow();
+      info(`[overlay] ensureWindow done win=${Boolean(win)}`);
       if (!win) {
         logger.info?.('[overlay] 无 Electron，降级为控制台气泡');
         return false;

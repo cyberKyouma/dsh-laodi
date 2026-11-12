@@ -65,9 +65,15 @@ export function collectPluginNames(root) {
     for (const bag of bags) {
       let values = [];
       if (!bag || typeof bag !== 'object') continue;
-      if (typeof bag.values === 'function') values = [...bag.values()];
-      else if (Array.isArray(bag)) values = bag;
-      else values = Object.values(bag);
+      try {
+        // Map/Set/Array only. Calling .values() on a Cordis registry during
+        // apply() can wait for this plugin to finish loading and deadlock.
+        if (Array.isArray(bag)) values = bag;
+        else if (bag instanceof Map || bag instanceof Set) values = [...bag.values()];
+        else values = Object.values(bag);
+      } catch {
+        values = [];
+      }
       for (const item of values) {
         if (item && typeof item === 'object') queue.push({ node: item, depth: depth + 1 });
       }

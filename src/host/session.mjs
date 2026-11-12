@@ -117,6 +117,8 @@ function textMessage(text, source) {
   return {
     content: [{ type: 'text', text: String(text ?? '') }],
     source,
+    // DSH 落盘后会校验 user/message.role 必须是 "user"；缺了这个字段，重启就加载不了会话。
+    role: 'user',
   };
 }
 
